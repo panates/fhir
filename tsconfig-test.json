@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig-base.json",
+  "include": ["./packages/*/test/**/*.*", "./packages/*/src/**/*.*"],
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    /* Generated classes give their types in the decorators; design:type
+       metadata would reference classes declared later in the same file */
+    "emitDecoratorMetadata": false,
+    "types": ["node", "mocha"],
+    "paths": {
+      "@fhirjs/client": ["./packages/client/src/index.js"],
+      "@fhirjs/core": ["./packages/core/src/index.js"],
+      "@fhirjs/fhirpath": ["./packages/fhirpath/src/index.js"],
+      "@fhirjs/r4": ["./packages/r4/src/index.js"],
+      "@fhirjs/r4b": ["./packages/r4b/src/index.js"],
+      "@fhirjs/r5": ["./packages/r5/src/index.js"]
+    }
+  }
+}

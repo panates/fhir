@@ -1,0 +1,10 @@
+{
+  "extends": "@panates/tsconfig/node.json",
+  "compilerOptions": {
+    "composite": true,
+    "incremental": true,
+    "sourceMap": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
+  }
+}
