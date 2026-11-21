@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig-base.json",
+  "include": ["."],
+  "exclude": ["build"],
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "noEmit": false,
+    "rootDir": ".",
+    "outDir": "./build",
+    "sourceMap": false
+  }
+}

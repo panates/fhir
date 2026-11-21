@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig-base.json",
+  "include": ["src"],
+  "references": [{ "path": "../fhirpath" }],
+  "compilerOptions": { "rootDir": "src", "outDir": "./build",
+    "noEmit": false }
+}

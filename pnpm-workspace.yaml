@@ -1,0 +1,9 @@
+packages:
+  - 'packages/*'
+
+linkWorkspacePackages: true
+minimumReleaseAge: 0
+
+# Install scripts pnpm may run: native binaries for the tests.
+allowBuilds:
+  '@swc/core': true

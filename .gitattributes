@@ -1,0 +1,5 @@
+# Written by support/build-models.mts from the HL7 packages: kept in the
+# repository so a build needs no download; folded in GitHub diffs.
+packages/r4/src/** linguist-generated=true
+packages/r4b/src/** linguist-generated=true
+packages/r5/src/** linguist-generated=true

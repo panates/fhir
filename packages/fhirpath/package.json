@@ -1,0 +1,21 @@
+{
+  "name": "@fhirjs/fhirpath",
+  "description": "FHIRPath for NodeJS: a parser and an evaluator compiled to functions, over a FHIR model of your own",
+  "version": "0.0.0",
+  "private": true,
+  "license": "BSD-3-Clause",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "default": "./build/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=22.0"
+  },
+  "dependencies": {
+    "tslib": "^2.9.1"
+  }
+}
