@@ -1094,6 +1094,8 @@ export * from './resources/vision-prescription.js';
 export type * from './value-sets.js';
 import { R4_VALUE_SETS } from './value-set-data.js';
 export { R4_VALUE_SETS };
+import { R4_SEARCH_PARAMETERS } from './search-parameters.js';
+export { R4_SEARCH_PARAMETERS };
 
 /** Every type of R4 */
 export const R4_TYPES: Function[] = [
@@ -1784,4 +1786,5 @@ export const R4_TYPES: Function[] = [
 /** The R4 model */
 export const r4Model = new FhirModel('4.0.1', R4_TYPES, {
   valueSets: R4_VALUE_SETS,
+  searchParameters: R4_SEARCH_PARAMETERS,
 });

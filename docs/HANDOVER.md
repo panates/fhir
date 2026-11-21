@@ -11,7 +11,7 @@ say: how to work in the repository, what is open, and what to watch for.
   and [panates/fhir#2](https://github.com/panates/fhir/pull/2) (CI and the repository
   standards) are merged into `dev`. `dev` did not exist before this work and was made from
   `main`.
-- 205 tests pass (`pnpm test`); type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
+- 219 tests pass (`pnpm test`); type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
 - CI: `.github/workflows/test.yml` runs on every push but to `main`. It builds, checks the types
   of the tests, fetches the HL7 packages (cached, keyed by the hash of
   `support/fetch-packages.mts`), checks that `pnpm generate` leaves the committed sources
@@ -27,7 +27,7 @@ say: how to work in the repository, what is open, and what to watch for.
 | `@fhirjs/fhirpath` | `packages/fhirpath` | Our own FHIRPath engine: hand-written lexer and Pratt parser, evaluator, functions, a UCUM subset, and `check()` (static type checking). No dependency; the FHIR model comes through the `FhirPathModel` interface |
 | `@fhirjs/r4`, `@fhirjs/r4b`, `@fhirjs/r5` | `packages/r4`, `packages/r4b`, `packages/r5` | Generated classes of FHIR 4.0.1, 4.3.0 and 5.0.0, with the codes of their required value sets and `r4Model` / `r4bModel` / `r5Model` |
 | `@fhirjs/client` | `packages/client` | REST client (`FhirClient`), search paging, conditional interactions, `bearerToken()`, SMART on FHIR (discovery, backend services, app launch with PKCE, id_token verification) |
-| `@fhirjs/server` | not started | Decided: a package of its own |
+| `@fhirjs/server` | not started | Designed in [`decisions/server.md`](decisions/server.md): a fetch-style handler, a store interface with an in-memory store, the core of the REST API first |
 
 ## Working in the repository
 
@@ -45,7 +45,7 @@ pnpm test
 - **The generated sources are committed** (`packages/{r4,r4b,r5}/src`, marked
   `linguist-generated`). After a change to `support/build-models.mts`, run `pnpm generate` and
   commit what it writes. A generator change for one version must leave the others unchanged.
-  Check it with the count of `@FhirElement` in each version: R4 5,534, R4B 5,652, R5 7,097.
+  Check it with the count of `@FhirElement` in each version (R4 5,534, R4B 5,652, R5 7,097) and of search parameters (R4 1,387, R4B 1,425, R5 1,239).
 - **Delete the `*.tsbuildinfo` files with `build/`.** `pnpm build` is `tsc -b`; with the build
   info left behind it takes a package as up to date and emits nothing, and the next package fails
   with `Cannot find module '@fhirjs/core'`.
@@ -104,7 +104,8 @@ All are recorded in section 13 of the design document. In short:
 
 ## Next steps, as proposed to the user
 
-1. `@fhirjs/server`.
+1. `@fhirjs/server`, as designed in [`decisions/server.md`](decisions/server.md). The four
+   decisions there were taken with the user; the rest is a proposal until it is built.
 2. The repository standards that still fail (`repo-check`): the `main-from-dev` workflow,
    GitHub settings (merge commits only, a ruleset on `main`, read-only default workflow
    permission, Dependabot alerts, secret scanning), `CLAUDE.md`, `.claude/settings.json` and the
