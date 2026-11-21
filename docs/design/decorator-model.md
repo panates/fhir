@@ -1124,7 +1124,9 @@ Not done:
   profiles of loaded packages bring their own invariants, which could be checked when loaded.
 - Types of most function results that are not listed (`aggregate()`, `resolve()`, `getValue()`)
   are "any": nothing is checked after them.
-- Operators are checked only for date + number; the operands of `=`, `<` and arithmetic are not.
+- ~~Operators are checked only for date + number; the operands of `=`, `<` and arithmetic are
+  not.~~ Arithmetic and ordering are checked now (FHIRPath operand types, below); equality is
+  not, by the suites' rule.
 
 ### Client (2026-11-20)
 
@@ -1330,6 +1332,59 @@ cover:
   expired, or with another nonce; `none` and `HS256`;
 - the key cache and a rotated `kid`;
 - `verifyIdToken: false`.
+
+### FHIRPath operand types (2026-11-21)
+
+`check()` now checks the operands of arithmetic (`+ - * / div mod`) and ordering (`< > <= >=`).
+Code: `PAIRS` and `Checker.fits()` in `packages/fhirpath/src/check.ts`.
+
+```ts
+fp.check('name.given.first() + 1', { type: 'Patient' });
+// [{ message: 'Cannot apply "+" to string and System.Integer', ... }]
+fp.check("name < 'a'", { type: 'Patient' });  // HumanName and System.String
+fp.check('multipleBirth div 2', { type: 'Patient' }); // [] : boolean or integer, one fits
+```
+
+How it decides:
+
+- **The rules are the evaluator's.** Each type has a kind: number (Integer, Decimal), String,
+  Boolean, date (Date, DateTime), Time, Quantity (System, FHIR's Quantity and its
+  specializations), or another complex type. A FHIR primitive has the kind of its System type,
+  strict or lenient, as evaluation converts it for operators. An operator takes the pairs of
+  kinds the evaluator computes, and fails on the pairs it throws for:
+
+  | Operator | Pairs taken (left, right) |
+  | -------- | ------------------------- |
+  | `+` | number, number; String, String; Quantity, Quantity; date or Time, Quantity |
+  | `-` | number, number; Quantity, Quantity; date or Time, Quantity |
+  | `*` | number, number; Quantity, Quantity; Quantity, number; number, Quantity |
+  | `/` | number, number; Quantity, Quantity; Quantity, number |
+  | `div`, `mod` | number, number |
+  | `<` `>` `<=` `>=` | the same kind on both sides; a String with a date or a Time (read as one) |
+
+- **As for functions, a check fails only when no pair fits**, so a choice is not an error for
+  the types it may have. A type the checker does not know, an abstract type (`Element`), and an
+  empty literal are not checked.
+- The date + number message stays as it was (`use a quantity (7 days)`); the new check runs on
+  the other cases.
+
+**Equality is not checked.** `=`, `!=`, `~` and `!~` never fail at run time; values of
+different types are not equal. A check was tried: it found invariants that can never hold, but
+the suites treat such operands as valid (`name.first() = 'Peter'` is expected to be false, not
+an error, in `testEquality29` and others), so it was dropped. What it found, for the record:
+R4's `con-3` compares a CodeableConcept with `'problem-list-item'`; R5's `nsd-3` and `sdf-26`
+compare a boolean with the String `'true'`. All three are always false.
+
+The parser now gives a parenthesized expression the span of its parentheses: an issue on
+`(value as Quantity) + 3` spans from `(`, not from inside it.
+
+Tests: `packages/r4/test/fhirpath.spec.ts` (`check()`), with a control run (each change reverted,
+the new test fails). The suites and the invariant checks are unchanged: no false positive.
+
+| | Before | Now |
+| --- | ------ | --- |
+| Tests | 203 | 205 |
+| R4, R4B, R5 suites | 1,070 / 1,068 / 1,221 in scope | the same |
 
 ## 13. Points to discuss
 

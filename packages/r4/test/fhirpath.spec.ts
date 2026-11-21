@@ -261,6 +261,46 @@ describe('FHIRPath over the R4 model', () => {
       ).toEqual([]);
     });
 
+    it('finds operands arithmetic and ordering do not take', () => {
+      expect(issues('name.given.first() + 1', 'Patient')).toEqual([
+        'name.given.first() + 1: Cannot apply "+" to string and System.Integer',
+      ]);
+      expect(issues('active * 2', 'Patient')).toEqual([
+        'active * 2: Cannot apply "*" to boolean and System.Integer',
+      ]);
+      expect(issues("1 'mg' div 2", 'Patient')).toEqual([
+        `1 'mg' div 2: Cannot apply "div" to System.Quantity and System.Integer`,
+      ]);
+      expect(issues("name < 'a'", 'Patient')).toEqual([
+        `name < 'a': Cannot apply "<" to HumanName and System.String`,
+      ]);
+      expect(issues('birthDate < 5', 'Patient')).toEqual([
+        'birthDate < 5: Cannot apply "<" to date and System.Integer',
+      ]);
+      expect(issues('(value as Quantity) + 3', 'Observation')).toEqual([
+        '(value as Quantity) + 3: Cannot apply "+" to Quantity and System.Integer',
+      ]);
+      expect(issues('(value as Period).unit', 'Observation')).toEqual([
+        '(value as Period).unit: Period has no element "unit"',
+      ]);
+    });
+
+    it('takes the operands evaluation takes', () => {
+      for (const e of [
+        "name.given.first() + 'x'",
+        '5 div 2.0',
+        "(value as Quantity) * 2 + 3 'mg'",
+        "birthDate + 1 year < today() and birthDate > '1900-01-01'",
+        "@T10:00 < @T11:00 and 2 'kg' >= 1 'kg'",
+      ])
+        expect(issues(e, ['Patient', 'Observation'])).toEqual([]);
+      // a choice: one type that fits is enough (multipleBirth is boolean or integer)
+      expect(issues('multipleBirth div 2', 'Patient')).toEqual([]);
+      expect(issues('value * 2', 'Observation')).toEqual([]);
+      // equality takes any operands; values of different types are not equal
+      expect(issues("name.first() = 'Peter'", 'Patient')).toEqual([]);
+    });
+
     it("reads a primitive's value element", () => {
       expect(issues('active.value', 'Patient')).toEqual([]);
       expect(
