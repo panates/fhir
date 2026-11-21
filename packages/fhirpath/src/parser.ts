@@ -188,7 +188,8 @@ export function parse(expression: string): FhirPathNode {
         if (t.value === '(') {
           const e = expr(0);
           expectOp(')');
-          return e;
+          // the parentheses are part of it: (a + b) * c spans from "("
+          return { ...e, start, end: tokens[pos - 1].end };
         }
         if (t.value === '{') {
           expectOp('}');
