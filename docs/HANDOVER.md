@@ -7,11 +7,13 @@ say: how to work in the repository, what is open, and what to watch for.
 
 ## State
 
-- Branch `feat/fhir-library`, pull request [panates/fhir#1](https://github.com/panates/fhir/pull/1)
-  against `dev`. It is open and not yet merged. `dev` did not exist before this work and was
-  made from `main`.
+- Pull request [panates/fhir#1](https://github.com/panates/fhir/pull/1) (`feat/fhir-library`) is
+  merged into `dev`. `dev` did not exist before this work and was made from `main`.
 - 203 tests pass (`pnpm test`); type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
-- The repository has no CI workflow, so the pull request ran no checks on GitHub.
+- CI: `.github/workflows/test.yml` runs on every push but to `main`. It builds, checks the types
+  of the tests, fetches the HL7 packages (cached, keyed by the hash of
+  `support/fetch-packages.mts`), checks that `pnpm generate` leaves the committed sources
+  unchanged, and runs `pnpm citest`.
 - Every package is `"private": true` at version `0.0.0`; nothing is published yet. The npm scope
   `@fhirjs` belongs to the user.
 
@@ -42,6 +44,9 @@ pnpm test
   `linguist-generated`). After a change to `support/build-models.mts`, run `pnpm generate` and
   commit what it writes. A generator change for one version must leave the others unchanged.
   Check it with the count of `@FhirElement` in each version: R4 5,534, R4B 5,652, R5 7,097.
+- **Delete the `*.tsbuildinfo` files with `build/`.** `pnpm build` is `tsc -b`; with the build
+  info left behind it takes a package as up to date and emits nothing, and the next package fails
+  with `Cannot find module '@fhirjs/core'`.
 - **`experimentalDecorators: true` must stay on** (legacy decorators, as opra uses them).
 - **`emitDecoratorMetadata` is off** for the generated packages and the tests. With it on, a
   class that refers to one declared later in the same file fails with a TDZ ReferenceError
@@ -96,11 +101,10 @@ All are recorded in section 13 of the design document. In short:
 
 ## Next steps, as proposed to the user
 
-1. Merge [panates/fhir#1](https://github.com/panates/fhir/pull/1) into `dev`. This is the
-   user's to do, with "Create a merge commit".
-2. A CI workflow, so pull requests run the tests. It was offered and not yet answered. CI needs
-   `pnpm fetch-packages` (or a cache of `support/fhir-packages/`), or most conformance tests
-   skip.
-3. `@fhirjs/server`.
-4. A test against HAPI's public test server writes test data to an outside service: ask the
+1. `@fhirjs/server`.
+2. The repository standards that still fail (`repo-check`): the `main-from-dev` workflow,
+   GitHub settings (merge commits only, a ruleset on `main`, read-only default workflow
+   permission, Dependabot alerts, secret scanning), `CLAUDE.md`, `.claude/settings.json` and the
+   package READMEs.
+3. A test against HAPI's public test server writes test data to an outside service: ask the
    user first.

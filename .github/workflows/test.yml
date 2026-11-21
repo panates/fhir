@@ -1,0 +1,68 @@
+name: Test
+on:
+  # Can be run manually
+  workflow_dispatch:
+
+  # Every push but to main, which only takes pull requests from dev
+  push:
+    branches-ignore:
+      - main
+
+# This workflow only reads the repository
+permissions:
+  contents: read
+
+# Only one run per branch at a time
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # A push whose commit message says no-test skips the tests
+    if: >
+      github.event_name != 'push' ||
+      !contains(github.event.head_commit.message, 'no-test')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Checks the repository out and installs what the lockfile pins
+      - name: Setup Environment
+        uses: panates/gh-setup-node@v2
+        with:
+          node-version: '24'
+          install: 'ci'
+
+      - name: Build
+        run: pnpm build
+
+      - name: Check types of the tests
+        run: pnpm exec tsc -p tsconfig-test.json --noEmit
+
+      # The HL7 packages and the FHIRPath suites (about 1.3 GB). Without them the conformance
+      # tests skip. support/fetch-packages.mts names every package and version, so its hash is
+      # the key.
+      - name: Cache the FHIR packages
+        uses: actions/cache@v5
+        with:
+          path: support/fhir-packages
+          key: fhir-packages-${{ hashFiles('support/fetch-packages.mts') }}
+
+      # Downloads only what the cache did not restore
+      - name: Fetch the FHIR packages
+        run: pnpm fetch-packages
+
+      # The generated classes are committed; they must be what the generator writes from the
+      # core packages fetched above
+      - name: Check the generated sources
+        run: |
+          pnpm generate
+          changes=$(git status --porcelain -- packages/r4/src packages/r4b/src packages/r5/src)
+          if [ -n "$changes" ]; then
+            echo "$changes"
+            echo "::error::The generated sources differ from what pnpm generate writes"
+            exit 1
+          fi
+
+      - name: Run unit tests
+        run: pnpm run citest
