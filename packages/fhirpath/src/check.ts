@@ -263,6 +263,44 @@ const SAME = new Set([
   'power',
 ]);
 
+/**
+ * What an operator does with a value: its kind. N: Integer or Decimal, S:
+ * String, B: Boolean, D: Date or DateTime, T: Time, Q: a Quantity (System or
+ * FHIR), C: another complex type
+ */
+type Kind = 'N' | 'S' | 'B' | 'D' | 'T' | 'Q' | 'C';
+
+const KIND_OF_SYSTEM: Record<string, Kind> = {
+  Integer: 'N',
+  Decimal: 'N',
+  String: 'S',
+  Boolean: 'B',
+  Date: 'D',
+  DateTime: 'D',
+  Time: 'T',
+  Quantity: 'Q',
+};
+
+/**
+ * The pairs of kinds (left, right) an operator takes, as evaluation has them:
+ * arithmetic and ordering fail at run time on other pairs. A string on one
+ * side of a date is read as a date.
+ *
+ * Equality (=, ~ and their negations) is not here: it never fails, and the
+ * HL7 suites take values of different types as valid operands that are not
+ * equal (name.first() = 'Peter' is false).
+ */
+const PAIRS: Record<string, ReadonlySet<string>> = {};
+const pairs = (ops: string[], list: string) => {
+  for (const op of ops) PAIRS[op] = new Set(list.split(' '));
+};
+pairs(['+'], 'NN SS QQ DQ TQ');
+pairs(['-'], 'NN QQ DQ TQ');
+pairs(['*'], 'NN QQ QN NQ');
+pairs(['/'], 'NN QQ QN');
+pairs(['div', 'mod'], 'NN');
+pairs(['<', '>', '<=', '>='], 'NN SS QQ DD TT DS SD TS ST');
+
 /** The checker of one expression */
 class Checker {
   readonly issues: FhirPathIssue[] = [];
@@ -487,6 +525,39 @@ class Checker {
     return false;
   }
 
+  /** The kind of a type for operators; undefined when not known here */
+  private kindOf(t: string): Kind | undefined {
+    if (t.startsWith('System.')) return KIND_OF_SYSTEM[t.slice(7)];
+    const m = this.model;
+    if (!m?.hasType(t)) return;
+    if (m.isPrimitive(t)) return KIND_OF_SYSTEM[SYSTEM_TYPE_OF_PRIMITIVE[t]];
+    // an abstract type (Element, DataType) may be a primitive
+    if (m.isAbstract?.(t)) return;
+    return m.isType(t, 'Quantity') ? 'Q' : 'C';
+  }
+
+  /** The kinds of a collection's types; undefined when one is not known */
+  private kinds(t: CType): Set<Kind> | undefined {
+    if (!t.types?.size) return;
+    const out = new Set<Kind>();
+    for (const x of t.types) {
+      const k = this.kindOf(x);
+      if (!k) return;
+      out.add(k);
+    }
+    return out;
+  }
+
+  /** Whether an operator takes some type of each side */
+  private fits(op: string, left: CType, right: CType): boolean {
+    const allowed = PAIRS[op];
+    const a = allowed && this.kinds(left);
+    const b = allowed && this.kinds(right);
+    if (!a || !b) return true;
+    for (const x of a) for (const y of b) if (allowed.has(x + y)) return true;
+    return false;
+  }
+
   check(node: FhirPathNode, focus: CType, scope: Scope = {}): CType {
     switch (node.kind) {
       case 'literal':
@@ -613,6 +684,11 @@ class Checker {
       this.fail(
         node,
         `Cannot ${node.op === '+' ? 'add' : 'subtract'} ${this.label(right)} ${node.op === '+' ? 'to' : 'from'} ${this.label(left)}: use a quantity (7 days)`,
+      );
+    else if (!this.fits(node.op, left, right))
+      this.fail(
+        node,
+        `Cannot apply "${node.op}" to ${this.label(left)} and ${this.label(right)}`,
       );
     switch (node.op) {
       case 'xor':

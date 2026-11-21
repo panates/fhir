@@ -7,9 +7,11 @@ say: how to work in the repository, what is open, and what to watch for.
 
 ## State
 
-- Pull request [panates/fhir#1](https://github.com/panates/fhir/pull/1) (`feat/fhir-library`) is
-  merged into `dev`. `dev` did not exist before this work and was made from `main`.
-- 203 tests pass (`pnpm test`); type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
+- Pull requests [panates/fhir#1](https://github.com/panates/fhir/pull/1) (`feat/fhir-library`)
+  and [panates/fhir#2](https://github.com/panates/fhir/pull/2) (CI and the repository
+  standards) are merged into `dev`. `dev` did not exist before this work and was made from
+  `main`.
+- 205 tests pass (`pnpm test`); type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
 - CI: `.github/workflows/test.yml` runs on every push but to `main`. It builds, checks the types
   of the tests, fetches the HL7 packages (cached, keyed by the hash of
   `support/fetch-packages.mts`), checks that `pnpm generate` leaves the committed sources
@@ -91,9 +93,10 @@ All are recorded in section 13 of the design document. In short:
   - R4B's `sdf-24` and `sdf-25` take the `length()` of an `ElementDefinition`.
   - R4B types `Element.id` as `id`, which its own data breaks; the generator keeps `string`.
 - **Not done:**
-  - Core and FHIRPath: the terminology functions (`%terminologies`), XML, invariants of
-    profiles checked when they are loaded, and operand types of `=`, `<` and arithmetic in
-    `check()`.
+  - Core and FHIRPath: the terminology functions (`%terminologies`), XML, and invariants of
+    profiles checked when they are loaded. `check()` checks the operands of arithmetic and
+    ordering; equality is left unchecked on purpose (see "FHIRPath operand types" in the design
+    document).
   - IGs: no R4B or R5 IG has been tested; only US Core 6.1.0 on R4 has.
   - Client: SMART `private_key_jwt` for app launch, dynamic client registration, bulk data
     (`respond-async`), subscriptions, and tests against a real FHIR or authorization server.

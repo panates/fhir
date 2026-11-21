@@ -38,7 +38,7 @@ committed sources.
 ## Rules and traps
 
 - **Run `pnpm fetch-packages` before you measure.** Without it the tests that need the HL7
-  packages are skipped, and the test count is not the real one (203 with them).
+  packages are skipped, and the test count is not the real one (205 with them).
 - **Never edit `packages/{r4,r4b,r5}/src` by hand.** Change `support/build-models.mts`, run
   `pnpm generate` and commit what it writes. A generator change for one version must leave the
   others unchanged: count `@FhirElement` in each (R4 5,534, R4B 5,652, R5 7,097).
