@@ -220,8 +220,15 @@ describe('Package loading: US Core 6.1.0 with its dependencies', function () {
     // with the core package's value sets, every slicing by value set is checked
     expect(us.warnings).toEqual([]);
     // the core package's own: two examples without a snapshot, a resolve() discriminator
+    // The R4 extensions package has a search parameter on R5's DeviceUsage
     for (const r of fhir.packageReports.slice(1, -1))
-      expect(r.warnings).toEqual([]);
+      expect(r.warnings).toEqual(
+        r.package === 'hl7.fhir.uv.extensions.r4#1.0.0'
+          ? [
+              'http://hl7.org/fhir/SearchParameter/workflow-researchStudy: unknown base DeviceUsage, not loaded',
+            ]
+          : [],
+      );
   });
 
   it('decodes every example of US Core', () => {

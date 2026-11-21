@@ -73,11 +73,43 @@ interface FhirStore {
   link carries the page as an offset, so the server keeps no state between requests.
 - **An unknown parameter** is an error (400) when the request says `Prefer: handling=strict`, and
   is left out of `self` otherwise, as the specification says.
-- **Where the definitions come from.** Core does not read `SearchParameter` resources today, and
-  the generated packages do not hold them. Proposal: the generator writes a compact table per
-  version (name, type, base types, FHIRPath expression, target types) into `@fhirjs/r4`, `r4b`
-  and `r5`, and an IG package adds its own `SearchParameter` resources through `FhirPackage`.
-  R4's core package has about 1,400 of them.
+- **Where the definitions come from:** see "Search parameter tables" below (decided and built).
+
+## Search parameter tables (2026-11-21)
+
+Decided with the user: the generator writes the search parameters of each version into its
+package, so a server needs no HL7 package at run time. Built:
+
+- `FhirSearchParameter` in `@fhirjs/core` (`search-parameter.ts`): `url`, `code`, `type`, `base`,
+  `expression`, `target`, `component`. `FhirModel` keeps them by base type:
+  `model.searchParameters('Patient')` gives the type's own and those of its base types
+  (`Resource`'s `_id`), by code; `model.getSearchParameter('Patient', 'birthdate')` one of them.
+  A profile class has its type's. `FhirContext` copies them into its own model.
+- `support/build-models.mts` writes `search-parameters.ts` (`R4_SEARCH_PARAMETERS` ...) and gives
+  it to the version's model. It leaves out the core package's examples
+  (`SearchParameter/example`, `example-reference`), which would replace `_id` and
+  `Condition.subject`, and the ten R4 and R4B extension parameters with no `base`. Where two
+  define one code on one base (R4B's and R5's `filter` and `Resource-filter`), the one named after
+  its base is kept.
+- `loadPackage()` adds an implementation guide's `SearchParameter` resources (US Core: 106); one
+  with the code of a core parameter replaces it on that base (US Core's `_id` of Patient). A FHIR
+  core package adds none: the model has its parameters already, and its examples would replace
+  real ones. A parameter on a type the model does not have is reported and left out (the R4
+  extensions package has one on R5's `DeviceUsage`). `FhirPackage` now indexes
+  `SearchParameter` resources.
+
+| Version | Parameters | Without an expression |
+| ------- | ---------- | --------------------- |
+| R4 | 1,387 | 6: `_text`, `_content`, `_filter`, `_query`, and `Patient.age`, `Patient.birthOrderBoolean` |
+| R4B | 1,425 | 10: the special ones (`_has`, `_list`, `_type` ...) and the same two of Patient |
+| R5 | 1,239 | 12: the special ones, and `ImagingStudy.reason`, `Medication.form` and two of `MedicationKnowledge`, which the specification left without one |
+
+Every expression parses, and every base and target is a type of the model. The tables add about
+600 KB of source to each version package; the `@FhirElement` counts are unchanged.
+
+Tests: `packages/{r4,r4b,r5}/test/search-parameters.spec.ts` (shared checks in
+`packages/core/test/_support/search-parameters.ts`), with control runs: without skipping the core
+package, it adds 1,390 parameters; without indexing `SearchParameter`, US Core adds none.
 
 ## Writing
 

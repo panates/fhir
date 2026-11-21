@@ -79,18 +79,21 @@ interface ED {
 const sds = new Map<string, SD>();
 const valueSets = new Map<string, any>();
 const codeSystems = new Map<string, any>();
+const searchParams: any[] = [];
 
 for (const file of readdirSync(srcDir)) {
   if (!file.endsWith('.json')) continue;
   if (
     !file.startsWith('StructureDefinition-') &&
     !file.startsWith('ValueSet-') &&
-    !file.startsWith('CodeSystem-')
+    !file.startsWith('CodeSystem-') &&
+    !file.startsWith('SearchParameter-')
   )
     continue;
   const res = JSON.parse(readFileSync(path.join(srcDir, file), 'utf8'));
   if (res.resourceType === 'ValueSet') valueSets.set(res.url, res);
   else if (res.resourceType === 'CodeSystem') codeSystems.set(res.url, res);
+  else if (res.resourceType === 'SearchParameter') searchParams.push(res);
   else if (
     res.resourceType === 'StructureDefinition' &&
     ['primitive-type', 'complex-type', 'resource'].includes(res.kind) &&
@@ -706,6 +709,66 @@ for (const [file, list] of files) {
   writeFileSync(path.join(outDir, 'value-set-data.ts'), out.join('\n'));
 }
 
+// Search parameters, for a server
+const searchParamNotes: string[] = [];
+{
+  // the base types of the classes generated, and Resource and DomainResource
+  const bases = new Set(
+    [...selected].filter(n => classes.get(n)!.kind === 'resource'),
+  );
+  const byKey = new Map<string, any>(); // base|code -> SearchParameter
+  for (const sp of searchParams.sort((a, b) => a.url.localeCompare(b.url))) {
+    // the package's examples (SearchParameter/example) are not definitions
+    if (/^example/.test(sp.id)) continue;
+    if (!sp.base?.length) {
+      searchParamNotes.push(`${sp.id}: no base`);
+      continue;
+    }
+    for (const base of sp.base) {
+      if (!bases.has(base)) continue;
+      const key = `${base}|${sp.code}`;
+      const prev = byKey.get(key);
+      // two for one code: the one named after its base (Resource-filter, not filter)
+      if (prev && !String(sp.id).startsWith(`${base}-`)) {
+        searchParamNotes.push(`${sp.id}: ${key} is ${prev.id}`);
+        continue;
+      }
+      if (prev) searchParamNotes.push(`${prev.id}: ${key} is ${sp.id}`);
+      byKey.set(key, sp);
+    }
+  }
+  const kept = [...new Set(byKey.values())].sort((a, b) =>
+    a.url.localeCompare(b.url),
+  );
+  const out = [HEADER];
+  out.push(`import type { FhirSearchParameter } from '${CORE}';\n`);
+  out.push(
+    `/** The search parameters of ${VERSION}, from the SearchParameter resources of ${CORE_PACKAGE.name} */`,
+  );
+  out.push(
+    `export const ${VERSION}_SEARCH_PARAMETERS: FhirSearchParameter[] = [`,
+  );
+  for (const sp of kept) {
+    const p: Record<string, unknown> = {
+      url: sp.url,
+      code: sp.code,
+      type: sp.type,
+      base: sp.base.filter((b: string) => bases.has(b)),
+    };
+    if (sp.expression) p.expression = sp.expression;
+    if (sp.target?.length) p.target = sp.target;
+    if (sp.component?.length)
+      p.component = sp.component.map((c: any) => ({
+        definition: c.definition,
+        expression: c.expression,
+      }));
+    out.push(`  ${lit(p)},`);
+  }
+  out.push('];\n');
+  writeFileSync(path.join(outDir, 'search-parameters.ts'), out.join('\n'));
+  searchParamNotes.unshift(`${kept.length} search parameters`);
+}
+
 // Index
 {
   const sorted = [...files.keys()].sort();
@@ -724,12 +787,16 @@ for (const [file, list] of files) {
   for (const f of sorted) out.push(`export * from './${f}.js';`);
   out.push(`export type * from './value-sets.js';`);
   out.push(`import { ${VERSION}_VALUE_SETS } from './value-set-data.js';`);
-  out.push(`export { ${VERSION}_VALUE_SETS };\n`);
+  out.push(`export { ${VERSION}_VALUE_SETS };`);
+  out.push(
+    `import { ${VERSION}_SEARCH_PARAMETERS } from './search-parameters.js';`,
+  );
+  out.push(`export { ${VERSION}_SEARCH_PARAMETERS };\n`);
   out.push(
     `/** Every type of ${VERSION} */\nexport const ${VERSION}_TYPES: Function[] = [\n  ${all.join(',\n  ')},\n];\n`,
   );
   out.push(
-    `/** The ${VERSION} model */\nexport const ${VERSION.toLowerCase()}Model = new FhirModel('${FHIR_VERSION}', ${VERSION}_TYPES, {\n  valueSets: ${VERSION}_VALUE_SETS,\n});\n`,
+    `/** The ${VERSION} model */\nexport const ${VERSION.toLowerCase()}Model = new FhirModel('${FHIR_VERSION}', ${VERSION}_TYPES, {\n  valueSets: ${VERSION}_VALUE_SETS,\n  searchParameters: ${VERSION}_SEARCH_PARAMETERS,\n});\n`,
   );
   writeFileSync(path.join(outDir, 'index.ts'), out.join('\n'));
 }
@@ -754,3 +821,4 @@ console.log(
   counts,
   `${unions.size} value set types`,
 );
+console.log(`search parameters: ${searchParamNotes.join('; ')}`);

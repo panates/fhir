@@ -3,7 +3,12 @@ import path from 'node:path';
 import { readTgz } from './tgz.js';
 
 /** The resource types a package is read for */
-const CONFORMANCE = new Set(['StructureDefinition', 'ValueSet', 'CodeSystem']);
+const CONFORMANCE = new Set([
+  'StructureDefinition',
+  'ValueSet',
+  'CodeSystem',
+  'SearchParameter',
+]);
 
 /** A conformance resource of a package, as its .index.json lists it */
 export interface FhirPackageEntry {

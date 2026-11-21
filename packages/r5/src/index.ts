@@ -1324,6 +1324,8 @@ export * from './resources/vision-prescription.js';
 export type * from './value-sets.js';
 import { R5_VALUE_SETS } from './value-set-data.js';
 export { R5_VALUE_SETS };
+import { R5_SEARCH_PARAMETERS } from './search-parameters.js';
+export { R5_SEARCH_PARAMETERS };
 
 /** Every type of R5 */
 export const R5_TYPES: Function[] = [
@@ -2193,4 +2195,5 @@ export const R5_TYPES: Function[] = [
 /** The R5 model */
 export const r5Model = new FhirModel('5.0.0', R5_TYPES, {
   valueSets: R5_VALUE_SETS,
+  searchParameters: R5_SEARCH_PARAMETERS,
 });

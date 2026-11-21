@@ -1,6 +1,7 @@
 import { getOwnTypeMetadata } from './decorators.js';
 import type { FhirPackage } from './package/fhir-package.js';
 import { ProfileBuilder } from './package/profile-builder.js';
+import { type FhirSearchParameter, searchParameterOf } from './search-parameter.js';
 import {
   codeSystemCodes,
   resolveValueSet,
@@ -394,6 +395,8 @@ export class FhirModel {
   private readonly _csFromPackages = new Map<string, string[] | null>();
   private readonly _resolving = new Set<string>();
   private readonly _building = new Set<string>();
+  /** Search parameters by base type, then by code */
+  private readonly _searchParams = new Map<string, Map<string, FhirSearchParameter>>();
   private _warnings: string[] = [];
 
   constructor(
@@ -403,10 +406,42 @@ export class FhirModel {
     options?: {
       /** Codes of value sets by canonical URL: code system -> codes */
       valueSets?: Record<string, Record<string, string[]>>;
+      /** The search parameters of the version */
+      searchParameters?: Iterable<FhirSearchParameter>;
     },
   ) {
     for (const ctor of classes) this.addClass(ctor);
     if (options?.valueSets) this.addValueSets(options.valueSets);
+    if (options?.searchParameters) this.addSearchParameters(options.searchParameters);
+  }
+
+  /** Adds search parameters; one with the code of an earlier one on the same base replaces it */
+  addSearchParameters(params: Iterable<FhirSearchParameter>): void {
+    for (const p of params)
+      for (const base of p.base) {
+        let byCode = this._searchParams.get(base);
+        if (!byCode) this._searchParams.set(base, (byCode = new Map()));
+        byCode.set(p.code, p);
+      }
+  }
+
+  /**
+   * The search parameters of a resource type, its base types' included
+   * (Resource's _id): by code, the type's own first
+   */
+  searchParameters(type: string): Map<string, FhirSearchParameter> {
+    const out = new Map<string, FhirSearchParameter>();
+    if (!this.hasType(type)) return out;
+    for (let t: FhirTypeInfo | undefined = this.getType(type); t; t = t.base) {
+      const own = this._searchParams.get(t.name);
+      if (own) for (const [code, p] of own) if (!out.has(code)) out.set(code, p);
+    }
+    return out;
+  }
+
+  /** A search parameter of a resource type by its code ('birthdate', '_id') */
+  getSearchParameter(type: string, code: string): FhirSearchParameter | undefined {
+    return this.searchParameters(type).get(code);
   }
 
   /** Adds or replaces value sets: canonical URL -> code system -> codes */
@@ -495,6 +530,7 @@ export class FhirModel {
     model._sources = [...this._sources];
     for (const [url, e] of this._vsFromPackages) model._vsFromPackages.set(url, e);
     for (const [url, c] of this._csFromPackages) model._csFromPackages.set(url, c);
+    for (const [base, byCode] of this._searchParams) model._searchParams.set(base, new Map(byCode));
     for (const ctor of classes) model.addClass(ctor);
     return model;
   }
@@ -587,12 +623,29 @@ export class FhirModel {
         if (t?.kind === 'extension') extensions++;
         else if (t) profiles++;
       }
+      // its search parameters, after those the model has (an IG's replace a core one of its
+      // code). A FHIR core package adds none: the model has its parameters from the generated
+      // classes, and its examples (SearchParameter/example) would replace real ones.
+      const params: FhirSearchParameter[] = [];
+      const isCore = /^hl7\.fhir\.r[0-9]+b?\.core$/.test(pkg.name);
+      for (const entry of isCore ? [] : pkg.entriesOf('SearchParameter')) {
+        const p = searchParameterOf(pkg.resourceOf(entry));
+        if (!p) continue;
+        const unknown = p.base.filter(b => !this.hasType(b));
+        if (unknown.length) {
+          warnings.push(`${p.url}: unknown base ${unknown.join(', ')}, not loaded`);
+          continue;
+        }
+        params.push(p);
+      }
+      this.addSearchParameters(params);
       // the value sets the package's required bindings use, listed now
       const notListed = [...bound].filter(url => !this.getValueSet(url));
       return {
         package: pkg.id,
         profiles,
         extensions,
+        searchParameters: params.length,
         valueSets: bound.size - notListed.length,
         valueSetsNotListed: notListed,
         warnings,
@@ -696,6 +749,8 @@ export interface FhirPackageReport {
   package: string;
   profiles: number;
   extensions: number;
+  /** SearchParameter resources of the package added to the model */
+  searchParameters: number;
   /** Value sets of the package's required bindings whose codes are known */
   valueSets: number;
   /**

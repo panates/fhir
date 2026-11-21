@@ -1105,6 +1105,8 @@ export * from './resources/vision-prescription.js';
 export type * from './value-sets.js';
 import { R4B_VALUE_SETS } from './value-set-data.js';
 export { R4B_VALUE_SETS };
+import { R4B_SEARCH_PARAMETERS } from './search-parameters.js';
+export { R4B_SEARCH_PARAMETERS };
 
 /** Every type of R4B */
 export const R4B_TYPES: Function[] = [
@@ -1815,4 +1817,5 @@ export const R4B_TYPES: Function[] = [
 /** The R4B model */
 export const r4bModel = new FhirModel('4.3.0', R4B_TYPES, {
   valueSets: R4B_VALUE_SETS,
+  searchParameters: R4B_SEARCH_PARAMETERS,
 });
