@@ -361,6 +361,7 @@ describe('FhirServer over a MemoryStore', () => {
       'vread',
       'create',
       'update',
+      'patch',
       'delete',
       'history-instance',
       'history-type',
@@ -526,6 +527,7 @@ describe('FhirServer with a store per type: a facade over an existing database',
     expect(patient.interaction.map((i: any) => i.code)).toEqual([
       'read',
       'update',
+      'patch',
     ]);
     expect(observation).toMatchObject({
       type: 'Observation',

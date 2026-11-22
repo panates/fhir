@@ -306,6 +306,39 @@ and a store that names what it sorts by. Control runs: `eq` of a number without 
 a quantity's unit ignored, `:below` as equality, the memory store not sorting, and descending
 ignored, a test fails each time. 252 tests before, 257 after.
 
+## Built: conditional interactions, JSON Patch, $validate (2026-11-22)
+
+With these the first version of the design is complete.
+
+- **Conditional create** (`If-None-Exist`): created when the criteria find nothing; the resource
+  found is given back with 200 when they find one (nothing is written); 412 when they find more.
+- **Conditional update** (`PUT [type]?criteria`): updates the one resource found (a body id must
+  be its id, 400 otherwise); creates when nothing is found, with the body's id when it has one
+  (an update as create) or one the store gives; 412 for more than one.
+- **Conditional delete** (`DELETE [type]?criteria`): deletes the one resource found; 204 when
+  nothing is found; 412 for more than one (`conditionalDelete: single`).
+- **Their criteria are read strictly**: an unknown parameter is refused (400), since leaving it
+  out would widen the criteria, and empty criteria are refused. They need a store that searches;
+  without one they answer 405, and the `CapabilityStatement` says `false` and `not-supported`.
+- **`PATCH`** with a JSON Patch (`application/json-patch+json`, RFC 6902: add, remove, replace,
+  move, copy, test), on `[type]/[id]` or `[type]?criteria` (the one resource found; 404 for none,
+  412 for more). It is applied to the current version, then checked like an update (422 with the
+  model's issues) and written by `update`, so `If-Match` and versions work as for `PUT`. A patch
+  that is not one answers 400; one that cannot be applied (a path that is not there, a failed
+  test) 422; one that changes the id or the type 422. Decimals keep their places, those the patch
+  leaves and those it writes (`2.50`). The `CapabilityStatement` lists `patch` for a type whose
+  store reads and updates.
+- **`POST [type]/$validate`** with the resource, or a Parameters with `resource` and `profile`;
+  `profile` may also be in the URL. It answers 200 with the issues as an OperationOutcome
+  (warnings included, such as `dom-6`), and stores nothing. A profile the server does not know is
+  refused (400). Each type lists the operation in the `CapabilityStatement`.
+
+Tests: `packages/server/test/conditional.spec.ts`, 14, over HTTP and through `@fhirjs/client`'s
+conditional calls and `patch()`. Control runs: a conditional create that always creates, a patch
+that drops the text of a decimal it writes, a `test` that always passes, a conditional update
+that takes the first of several, and `$validate` without the profile asked for, a test fails each
+time. 257 tests before, 271 after.
+
 ## Not in the first version
 
 Batch and transaction, `_include` and `_revinclude`, chained and reverse-chained search (`_has`),
