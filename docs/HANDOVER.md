@@ -11,7 +11,7 @@ say: how to work in the repository, what is open, and what to watch for.
   and [panates/fhir#2](https://github.com/panates/fhir/pull/2) (CI and the repository
   standards) are merged into `dev`. `dev` did not exist before this work and was made from
   `main`.
-- 323 tests pass (`pnpm test`); type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
+- 330 tests pass (`pnpm test`); type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
 - CI: `.github/workflows/test.yml` runs on pull requests into `dev` and on pushes to `dev`. It
   builds, checks the types of the tests, fetches the HL7 packages (cached, keyed by the hash of
   `support/fetch-packages.mts`; a pull request restores the cache `dev`'s runs save), checks that
@@ -29,7 +29,7 @@ say: how to work in the repository, what is open, and what to watch for.
 | `@fhirjs/r4`, `@fhirjs/r4b`, `@fhirjs/r5` | `packages/r4`, `packages/r4b`, `packages/r5` | Generated classes of FHIR 4.0.1, 4.3.0 and 5.0.0, with the codes of their required value sets and `r4Model` / `r4bModel` / `r5Model` |
 | `@fhirjs/client` | `packages/client` | REST client (`FhirClient`), search paging, conditional interactions, `bearerToken()`, SMART on FHIR (discovery, backend services, app launch with PKCE, id_token verification) |
 | `@fhirjs/smart` | `packages/smart` | JWT verification with JWK Sets (keys kept, read again on rotation, at most every 30 s), and SMART scopes v1 and v2. The client verifies id_tokens with it; the server will verify access tokens |
-| `@fhirjs/server` | `packages/server` | Read, write, history and search (every parameter type but composite and special, `_sort`), conditional interactions, JSON Patch and `$validate` built: the first version of the design is complete. Authentication and authorization next, designed in [`decisions/server-auth.md`](decisions/server-auth.md). Designed in [`decisions/server.md`](decisions/server.md): a fetch-style handler, one store (an in-memory one, or a facade over an existing database that declares what it supports; `RoutingStore` sends types to stores of their own), the core of the REST API first |
+| `@fhirjs/server` | `packages/server` | Read, write, history and search (every parameter type but special, `_sort`), conditional interactions, JSON Patch and `$validate` built: the first version of the design is complete. Authentication and authorization next, designed in [`decisions/server-auth.md`](decisions/server-auth.md). Designed in [`decisions/server.md`](decisions/server.md): a fetch-style handler, one store (an in-memory one, or a facade over an existing database that declares what it supports; `RoutingStore` sends types to stores of their own), the core of the REST API first |
 
 ## Working in the repository
 
@@ -117,8 +117,8 @@ All are recorded in section 13 of the design document. In short:
    `SmartAuthorizer` with the compartments. Batch and transaction are built, and chained search, `_has`,
    `_include` and `_revinclude` ("Built: chained search and includes" in
    [`decisions/server.md`](decisions/server.md)). The server takes one store now; `RoutingStore`
-   sends types to stores of their own ("Decided: one store"). Next: composite parameters,
-   `_summary` and `_elements`, or a first facade store over a real database.
+   sends types to stores of their own ("Decided: one store"). Composite parameters are built.
+   Next: `_summary` and `_elements`, or a first facade store over a real database.
 2. The repository standards that still fail (`repo-check`) are GitHub settings only, the user's
    to change: merge commits only, a ruleset on `main`, read-only default workflow permission,
    Dependabot alerts, secret scanning and push protection.

@@ -348,13 +348,14 @@ describe('FhirServer search over a MemoryStore', () => {
       _id: 'token',
       _lastUpdated: 'date',
     });
-    // composite and special parameters are not searched
+    // special parameters are not searched
     const types = new Set(
       cs.rest[0].resource.flatMap((r: any) =>
         (r.searchParam ?? []).map((p: any) => p.type),
       ),
     );
     expect([...types].sort()).toEqual([
+      'composite',
       'date',
       'number',
       'quantity',

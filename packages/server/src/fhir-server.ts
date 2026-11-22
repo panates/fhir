@@ -27,6 +27,7 @@ import {
   parseCriterion,
   RESULT_PARAMS,
   SEARCH_TYPES,
+  type SearchComponent,
   type SearchCriterion,
   type SearchQuery,
   type SearchValue,
@@ -78,6 +79,8 @@ interface Served {
   caps: StoreCapabilities;
   /** The search parameters the store answers and the server parses, by code */
   params: Map<string, FhirSearchParameter>;
+  /** The parts of its composite parameters, by code */
+  components: Map<string, SearchComponent[]>;
 }
 
 const FHIR_JSON = 'application/fhir+json';
@@ -161,7 +164,7 @@ export class FhirServer {
         this._served.set(type, {
           store,
           caps,
-          params: searchParams(model, type, caps),
+          ...searchParams(model, type, caps),
         });
       else if (options.resources)
         throw new TypeError(`The store does not serve ${type}`);
@@ -1457,7 +1460,11 @@ export class FhirServer {
       const descending = item.startsWith('-');
       const code = descending ? item.slice(1) : item;
       const param = served.params.get(code);
-      if (!param || (served.caps.sort && !served.caps.sort.includes(code))) {
+      if (
+        !param ||
+        param.type === 'composite' ||
+        (served.caps.sort && !served.caps.sort.includes(code))
+      ) {
         if (strict)
           throw new FhirServerError(
             400,
@@ -1591,7 +1598,13 @@ export class FhirServer {
     const modifier = colon < 0 ? undefined : name.slice(colon + 1);
     const param = served.params.get(code);
     if (!param) return `Unknown search parameter ${name} for ${type}`;
-    return parseCriterion(param, modifier, value, isResourceType);
+    return parseCriterion(
+      param,
+      modifier,
+      value,
+      isResourceType,
+      served.components.get(code),
+    );
   }
 
   /** Why a chain from a type to another cannot be searched; undefined when it can */
@@ -1808,6 +1821,7 @@ export class FhirServer {
       store: this._main,
       caps: { interactions: history ? ['history'] : [], versions: 'all' },
       params: new Map(),
+      components: new Map(),
     };
   }
 
@@ -2101,21 +2115,43 @@ function searchParams(
   model: FhirContext['model'],
   type: string,
   caps: StoreCapabilities,
-): Map<string, FhirSearchParameter> {
-  const out = new Map<string, FhirSearchParameter>();
-  if (!caps.interactions.includes('search')) return out;
+): Pick<Served, 'params' | 'components'> {
+  const params = new Map<string, FhirSearchParameter>();
+  const components = new Map<string, SearchComponent[]>();
+  if (!caps.interactions.includes('search')) return { params, components };
   const all = model.searchParameters(type);
   for (const code of caps.searchParams ?? [])
     if (!all.has(code))
       throw new TypeError(
         `The store of ${type} names a search parameter ${type} does not have: ${code}`,
       );
+  const byUrl = new Map([...all.values()].map(p => [p.url, p]));
   for (const [code, p] of all) {
     if (!SEARCH_TYPES.has(p.type)) continue;
-    if (caps.searchParams ? caps.searchParams.includes(code) : p.expression)
-      out.set(code, p);
+    if (!(caps.searchParams ? caps.searchParams.includes(code) : p.expression))
+      continue;
+    if (p.type === 'composite') {
+      // its parts, each a parameter of a type the server parses
+      const parts = (p.component ?? []).map(c => {
+        const param = byUrl.get(c.definition);
+        return param &&
+          param.type !== 'composite' &&
+          SEARCH_TYPES.has(param.type)
+          ? { param, expression: c.expression }
+          : undefined;
+      });
+      if (!parts.length || parts.some(c => !c)) {
+        if (caps.searchParams)
+          throw new TypeError(
+            `The store of ${type} names a composite parameter whose components are not known: ${code}`,
+          );
+        continue;
+      }
+      components.set(code, parts as SearchComponent[]);
+    }
+    params.set(code, p);
   }
-  return out;
+  return { params, components };
 }
 
 /** The store, when it declares the interaction and has its method; 405 otherwise */

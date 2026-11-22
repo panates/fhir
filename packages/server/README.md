@@ -44,7 +44,7 @@ without storing it. `POST [base]` takes a batch Bundle, each entry run as a requ
 Bundle, all or nothing, when the store has `transaction()` (the memory store has): new resources referred to by `urn:uuid:` and conditional references are resolved.
 
 Search (`GET [type]?...`, `POST [type]/_search`) takes the token, string, date, reference,
-number, quantity and uri parameters of the version, with their modifiers and prefixes, sorts
+number, quantity, uri and composite parameters of the version, with their modifiers and prefixes, sorts
 with `_sort` and pages its results. `_include` and `_revinclude` (with `:iterate`) add the
 resources the matches refer to and those that refer to them; chained parameters
 (`subject:Patient.name`) and `_has` go to a store that declares `chains`. A store gets the criteria parsed and typed, to translate to
