@@ -33,6 +33,18 @@ export interface SearchValue {
   /** reference: the id; or the whole URL of an absolute reference in `url` */
   id?: string;
   url?: string;
+  /** composite: the value of each component, in order, parsed for its type */
+  components?: SearchValue[];
+}
+
+/**
+ * A part of a composite parameter: the parameter whose type its value
+ * takes, and the expression of its values from an item of the composite's
+ * expression (`code` from an Observation, `value.as(Quantity)` too)
+ */
+export interface SearchComponent {
+  param: FhirSearchParameter;
+  expression: string;
 }
 
 /**
@@ -54,6 +66,11 @@ export interface SearchCriterion {
   /** :missing: true or false */
   missing?: boolean;
   values: SearchValue[];
+  /**
+   * composite: its parts. A resource matches a value when one item of the
+   * composite's expression matches every component's value.
+   */
+  components?: SearchComponent[];
   chain?: SearchChain;
   has?: SearchChain;
 }
@@ -112,6 +129,7 @@ export const SEARCH_TYPES: ReadonlySet<FhirSearchParamType> = new Set([
   'number',
   'quantity',
   'uri',
+  'composite',
 ]);
 
 /** The modifiers each type takes (a reference also takes a resource type) */
@@ -123,6 +141,7 @@ const MODIFIERS: Record<string, ReadonlySet<string>> = {
   number: new Set(['missing']),
   quantity: new Set(['missing']),
   uri: new Set(['below', 'above', 'missing']),
+  composite: new Set(['missing']),
 };
 
 const PREFIXES = new Set([
@@ -218,8 +237,18 @@ export function parseCriterion(
   modifier: string | undefined,
   text: string,
   isResourceType: (name: string) => boolean,
+  components?: readonly SearchComponent[],
 ): SearchCriterion {
   const c: SearchCriterion = { param, values: [] };
+  if (param.type === 'composite') {
+    if (!components?.length)
+      throw new FhirServerError(
+        400,
+        `${param.code}: its components are not known`,
+        'not-supported',
+      );
+    c.components = [...components];
+  }
   if (modifier !== undefined) {
     const typeModifier = param.type === 'reference' && isResourceType(modifier);
     if (!typeModifier && !MODIFIERS[param.type]?.has(modifier))
@@ -240,12 +269,64 @@ export function parseCriterion(
     c.missing = text === 'true';
     return c;
   }
+  if (c.components) {
+    for (const raw of splitEscaped(text, ',')) {
+      const parts = splitEscaped(raw, '$');
+      if (parts.length !== c.components.length)
+        throw new FhirServerError(
+          400,
+          `${param.code}: "${raw}" needs ${c.components.length} parts, separated by $`,
+          'value',
+        );
+      c.values.push({
+        raw: unescape(raw, ',$'),
+        components: parts.map((part, k) => {
+          const comp = c.components![k];
+          const own = unescape(part, ',$');
+          if (own === '')
+            throw new FhirServerError(
+              400,
+              `${param.code}: "${raw}" has an empty part`,
+              'value',
+            );
+          return parseValue(comp.param, undefined, own, isResourceType);
+        }),
+      });
+    }
+    return c;
+  }
   for (const raw of splitValues(text)) {
     if (raw === '')
       throw new FhirServerError(400, `${param.code}: an empty value`, 'value');
     c.values.push(parseValue(param, modifier, raw, isResourceType));
   }
   return c;
+}
+
+/** Splits on a character that is not escaped, keeping the escapes */
+function splitEscaped(text: string, sep: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '\\' && i + 1 < text.length) cur += text[i] + text[++i];
+    else if (text[i] === sep) {
+      out.push(cur);
+      cur = '';
+    } else cur += text[i];
+  }
+  out.push(cur);
+  return out;
+}
+
+/** Removes the escapes of some characters only */
+function unescape(text: string, chars: string): string {
+  let out = '';
+  for (let i = 0; i < text.length; i++)
+    out +=
+      text[i] === '\\' && i + 1 < text.length && chars.includes(text[i + 1])
+        ? text[++i]
+        : text[i];
+  return out;
 }
 
 function parseValue(

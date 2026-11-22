@@ -138,7 +138,8 @@ interface StoreCapabilities {
 ## Search
 
 - **Parameter types in the first version:** token, string, date, reference, number, quantity, uri;
-  `_id` and `_lastUpdated`. Composite and special parameters come later.
+  `_id` and `_lastUpdated`. Composite parameters came later ("Built: composite parameters");
+  special ones are not searched.
 - **Modifiers and prefixes:** `:missing`, `:exact`, `:contains`, `:not`, `:text` (token), a type
   on a reference (`subject:Patient`); prefixes `eq ne lt gt le ge sa eb ap` for date, number and
   quantity, with the implicit ranges of dates (`2020` is the whole year).
@@ -318,7 +319,7 @@ Number, quantity and uri parameters, and `_sort`.
   what it can sort by in `sort`; the others, and unknown names, are left out of the query and
   the links, or refused with `handling=strict`. `query.sort` gives the store the order, and
   `query.compare()` compares two resources by FHIRPath, as `MemoryStore` sorts.
-- **Composite and special parameters** stay unsearched.
+- **Composite and special parameters** stay unsearched (composite ones came after).
 
 Tests: 5 more in `packages/server/test/search.spec.ts`, on two RiskAssessments, two Observations
 with quantities and three ValueSets: each prefix of a number, quantities with and without units,
@@ -561,7 +562,36 @@ it (nothing kept in either), and merged history with paging; the tests that used
 transaction, history not sorted, system history without checking the types, the server ignoring
 the chain function; tests fail each time. 319 tests before, 323 after.
 
+## Built: composite parameters (2026-11-22)
+
+`parseCriterion()` in `search-query.ts`, `_compositeMatches()` in `search-match.ts`,
+`searchParams()` in `fhir-server.ts`.
+
+- **The components** are the search parameters a composite's `component.definition` names,
+  found among the type's parameters by URL, each with its expression relative to an item of the
+  composite's expression. A composite is served when every component is a parameter of a type
+  the server parses; the others are left out, and a store that names one in `searchParams` is
+  refused when the server starts. R4 and R4B serve all 72; R5 serves 73 of 84, as 11 name
+  search parameters R5 does not define (`Observation-value-string`, `Encounter-period`, ...): an
+  error in the specification, left as it is.
+- **A value** is split on `$` into one part per component, each parsed for its component's type
+  (prefixes, systems and units as usual); `\$` and `\,` are escapes. Too few or too many parts,
+  or an empty one, answer 400. `SearchCriterion.components` and `SearchValue.components` give a
+  store the parts, to translate.
+- **A match** is one item of the composite's expression whose components each match their part:
+  `component-code-value-quantity=8462-4$120` does not find a blood pressure whose systolic value
+  is 120 and diastolic code 8462-4. `:missing` is the only modifier; an item counts when every
+  component has a value. Sorting by a composite is refused like an unknown sort.
+
+Tests: `packages/server/test/composite.spec.ts`, 7: values with prefixes, systems and units,
+OR, components matched in one item, `combo-`, escapes, `:missing`, a composite in `_has`,
+values refused, sorting refused, what a store is given, the `CapabilityStatement`, and R5's
+composites left out. Control runs: components read from the resource instead of the item,
+`:missing` not looking at the components, escapes lost when splitting, the number of parts
+not checked, sorting by a composite allowed, composites with unknown components kept; tests
+fail each time. 323 tests before, 330 after.
+
 ## Not in the first version
 
-Composite parameters, `_summary` and `_elements` on search, XML,
+`_summary` and `_elements` on search, XML,
 subscriptions, bulk data.

@@ -3,6 +3,7 @@ import { FhirPath, type Item } from '@fhirjs/fhirpath';
 import { FhirServerError } from './fhir-server-error.js';
 import {
   dateRange,
+  type SearchComponent,
   type SearchCriterion,
   type SearchLookup,
   type SearchSort,
@@ -94,10 +95,19 @@ export class SearchMatcher {
           return true;
       return false;
     }
-    const items = this._values(resource, c);
+    let items = this._values(resource, c);
+    // a composite's item has a value when each of its components has one
+    if (c.components)
+      items = items.filter(i =>
+        c.components!.every(k => this._parts(resource, k, i).length),
+      );
     if (c.missing !== undefined) return c.missing === !items.length;
     const any = c.values.some(v =>
-      items.some(i => this._valueMatches(c, i, v, baseUrl)),
+      items.some(i =>
+        c.components
+          ? this._compositeMatches(resource, c.components, i, v, baseUrl)
+          : this._valueMatches(c, i, v, baseUrl),
+      ),
     );
     return c.modifier === 'not' ? !any : any;
   }
@@ -115,6 +125,37 @@ export class SearchMatcher {
       return this._fp.compile(expression).evaluateItems(resource);
     } catch {
       // data the expression cannot take (as() on several values): no values
+      return [];
+    }
+  }
+
+  /** Whether one item of a composite matches every component's value */
+  private _compositeMatches(
+    resource: Record<string, any>,
+    components: readonly SearchComponent[],
+    item: Item,
+    v: SearchValue,
+    baseUrl: string,
+  ): boolean {
+    return components.every((comp, k) => {
+      const c: SearchCriterion = { param: comp.param, values: [] };
+      return this._parts(resource, comp, item).some(p =>
+        this._valueMatches(c, p, v.components![k], baseUrl),
+      );
+    });
+  }
+
+  /** The values of a component, from an item of its composite */
+  private _parts(
+    resource: Record<string, any>,
+    comp: SearchComponent,
+    item: Item,
+  ): Item[] {
+    try {
+      return this._fp
+        .compile(comp.expression)
+        .evaluateItems(item, { resource });
+    } catch {
       return [];
     }
   }
