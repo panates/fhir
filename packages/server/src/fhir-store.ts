@@ -20,6 +20,12 @@ export interface StoreCapabilities {
   searchParams?: readonly string[];
   /** The parameters it can sort by */
   sort?: readonly string[];
+  /**
+   * create() keeps the id of the resource it is given, when it has one: the
+   * server gives ids itself to the new resources of a transaction, so that
+   * other entries can refer to them. Without it, the store gives every id.
+   */
+  acceptsIds?: boolean;
 }
 
 /** A resource as a store keeps it */
@@ -82,7 +88,11 @@ export interface FhirStore {
     versionId: string,
     context?: FhirRequestContext,
   ): Promise<StoredResource | undefined>;
-  /** Stores a new resource; the store gives it its id, versionId and lastUpdated */
+  /**
+   * Stores a new resource; the store gives it its versionId and
+   * lastUpdated, and its id unless the store declares acceptsIds and the
+   * resource has one
+   */
   create?(
     type: string,
     resource: Record<string, any>,
@@ -125,4 +135,16 @@ export interface FhirStore {
     query: SearchQuery,
     context?: FhirRequestContext,
   ): Promise<StorePage<StoredResource>>;
+  /**
+   * Runs `work` with a view of the store whose writes are kept when the work
+   * resolves and undone when it throws: what the work reads sees its own
+   * writes, and nothing else sees them before the end. The view has the
+   * methods of the store, except this one. A SQL store does it with BEGIN,
+   * COMMIT and ROLLBACK. Without it, the server takes no transaction for
+   * the store's types.
+   */
+  transaction?<T>(
+    work: (tx: FhirStore) => Promise<T>,
+    context?: FhirRequestContext,
+  ): Promise<T>;
 }

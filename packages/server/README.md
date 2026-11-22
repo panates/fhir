@@ -40,7 +40,9 @@ and `history` of an instance, a type and the server, with `ETag`, `If-Match`, `L
 `Prefer: return=`. A resource that is not valid is refused with 422 and its issues. Create, update,
 delete and patch also come conditional (`If-None-Exist`, `PUT [type]?criteria`), `PATCH` takes a
 JSON Patch, and `POST [type]/$validate` checks a resource against the model and a profile
-without storing it. `POST [base]` takes a batch Bundle: each entry runs as a request of its own.
+without storing it. `POST [base]` takes a batch Bundle, each entry run as a request of its own, and a transaction
+Bundle, all or nothing, when its types are in one store that has `transaction()` (the memory
+store has): new resources referred to by `urn:uuid:` and conditional references are resolved.
 
 Search (`GET [type]?...`, `POST [type]/_search`) takes the token, string, date, reference,
 number, quantity and uri parameters of the version, with their modifiers and prefixes, sorts

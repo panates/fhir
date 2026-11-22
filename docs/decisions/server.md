@@ -427,8 +427,8 @@ entry runs through `_dispatch()` with the caller of the Bundle.
   resource's `meta.lastUpdated`, to the millisecond; the header's time otherwise), and the
   resource, or `outcome` for an entry that failed. An entry the server cannot read answers 400 in
   its place, and the others go on.
-- `maxBundleEntries` (default 100): more answers 413. A `transaction` answers 400 until it is
-  built; another type of Bundle, 400.
+- `maxBundleEntries` (default 100): more answers 413. Another type of Bundle than `batch` or
+  `transaction`, 400.
 - The `CapabilityStatement` lists `batch`.
 
 Found while testing: the response Bundle, written with `JSON.stringify`, dropped the places of the
@@ -441,6 +441,39 @@ the client's `batch()`, and a Bundle authenticated once with entries authorized 
 Control runs: the Bundle written without the decimals' texts, a failing entry stopping the
 batch, entries run without the caller, no limit on entries, and `Prefer` not passed on, tests
 fail each time. 298 tests before, 304 after.
+
+## Built: transaction (2026-11-22)
+
+`POST [base]` with a `transaction` Bundle, as designed above. Code: `_transaction()` and
+`_placeholders()` in `fhir-server.ts`, `transaction()` in `memory-store.ts`.
+
+- **The store:** `FhirStore.transaction(work, context)`, optional, and `acceptsIds` in the
+  capabilities. `MemoryStore` has both: a transaction holds the store (other requests wait until
+  it ends, so nothing sees its writes first) and takes back the versions it wrote when the work
+  throws. Its `create()` keeps an id it is given (409 for one that exists).
+- **One store:** every entry's type must be served, and all of them in one store with
+  `transaction()`; otherwise 400 (404 for a type not served), before anything runs. The
+  `CapabilityStatement` lists `transaction` when every type served is in one such store.
+- **The order:** deletes, then creates, then updates and patches, then reads and searches; the
+  answer keeps the order of the request. Inside the transaction each entry goes through
+  `_dispatch()` as in a batch, with the store's view (`Exchange.tx`), so conditional entries
+  search inside it and reads see its writes.
+- **Placeholders**, after the deletes: a `POST` whose `fullUrl` is `urn:uuid:` or `urn:oid:`
+  gets an id from the server (400 when its store has no `acceptsIds`); with `ifNoneExist` that
+  finds one resource, the placeholder stands for that one. A `PUT` with such a `fullUrl` stands
+  for its URL. Every `reference` of the entries' resources to a placeholder is rewritten, and a
+  conditional one (`Patient?identifier=...`) becomes the one resource its search finds, after
+  the caller is authorized to search the type (412 for none or more).
+- **All or nothing:** the first entry that fails ends the transaction. The answer is its status
+  with its OperationOutcome, each issue's diagnostics starting `Entry <n>: `; the store undoes
+  what was written. A 403 for one entry refuses the whole transaction.
+
+Tests: `packages/server/test/transaction.spec.ts`, 7: the order and placeholders (with a
+reference back, a patch and a delete), nothing written when an entry fails (422, 412), conditional
+references and a conditional create, a refused entry, types in two stores or in a store without
+transactions or without `acceptsIds`, the client's `transaction()`, and `MemoryStore`'s undo and
+wait. Control runs: no undo, no wait, the Bundle's own order, references not rewritten, ids not
+given, tests fail each time. 304 tests before, 311 after.
 
 ## Not in the first version
 

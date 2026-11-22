@@ -187,9 +187,6 @@ describe('FhirServer: batch', () => {
     );
     expect([
       await outcome(await post('{"resourceType":"Patient"}')),
-      await outcome(
-        await post({ resourceType: 'Bundle', type: 'transaction', entry: [] }),
-      ),
       await outcome(await post({ resourceType: 'Bundle', type: 'history' })),
       await outcome(await post(eleven)),
       await outcome(await fetch(base)),
@@ -200,8 +197,7 @@ describe('FhirServer: batch', () => {
       ),
     ]).toEqual([
       '400 POST [base] takes a Bundle',
-      '400 Transactions are not supported yet; send a batch',
-      '400 POST [base] takes a batch Bundle, not a history',
+      '400 POST [base] takes a batch or transaction Bundle, not a history',
       '413 The Bundle has 11 entries; this server takes 10 at most',
       '405 GET is not supported on the server base',
       '415 A Bundle is sent as application/fhir+json, not application/xml',
