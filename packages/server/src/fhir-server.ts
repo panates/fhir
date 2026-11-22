@@ -12,6 +12,13 @@ import type {
   StoredVersion,
 } from './fhir-store.js';
 import { applyJsonPatch } from './json-patch.js';
+import type {
+  FhirAccessDecision,
+  FhirInteraction,
+  FhirPrincipal,
+  FhirRequestContext,
+  FhirSecurityOptions,
+} from './security.js';
 import { SearchMatcher } from './search-match.js';
 import {
   parseCriterion,
@@ -47,6 +54,11 @@ export interface FhirServerOptions {
   maxCount?: number;
   /** The software name in the CapabilityStatement */
   name?: string;
+  /**
+   * Who may call, and what they may do: authenticators and an authorizer.
+   * The server is open without it.
+   */
+  security?: FhirSecurityOptions;
   /** Called with an error the server did not expect; the client gets a 500 */
   onError?: (error: unknown, request: Request) => void;
 }
@@ -201,6 +213,7 @@ export class FhirServer {
       url,
       method,
       baseUrl: url.origin + this.base,
+      context: { request },
     };
 
     if (!seg.length) throw notAllowed(method, 'the server base');
@@ -211,6 +224,24 @@ export class FhirServer {
         JSON.stringify(this.capabilityStatement(ctx.baseUrl)),
       );
     }
+    if (
+      seg.length === 2 &&
+      seg[0] === '.well-known' &&
+      seg[1] === 'smart-configuration' &&
+      this.options.security?.smartConfiguration
+    ) {
+      if (method !== 'GET')
+        throw notAllowed(method, '.well-known/smart-configuration');
+      return new Response(
+        JSON.stringify(this.options.security.smartConfiguration),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        },
+      );
+    }
+    // everything else needs a caller, when the server has security
+    ctx.context.principal = await this._authenticate(ctx);
     if (seg[0] === '_history' && seg.length === 1) {
       if (method !== 'GET') throw notAllowed(method, '_history');
       return this._history(ctx, this._systemStore(), undefined, undefined);
@@ -276,7 +307,7 @@ export class FhirServer {
           if (method !== 'GET') throw notAllowed(method, `${type}/_history`);
           return this._history(ctx, served, type, undefined);
         }
-        if (method === 'GET') return this._read(type, id, served);
+        if (method === 'GET') return this._read(ctx, type, id, served);
         if (method === 'PUT') return this._update(ctx, type, id, served);
         if (method === 'DELETE') return this._delete(ctx, type, id, served);
         if (method === 'PATCH') return this._patch(ctx, type, id, served);
@@ -290,7 +321,7 @@ export class FhirServer {
         if (op !== '_history') break;
         if (method !== 'GET')
           throw notAllowed(method, `${type}/${id}/_history/${vid}`);
-        return this._vread(type, id, vid, served);
+        return this._vread(ctx, type, id, vid, served);
     }
     throw new FhirServerError(
       404,
@@ -304,30 +335,47 @@ export class FhirServer {
   /* ---------------------------------------------------------------- */
 
   private async _read(
+    ctx: Exchange,
     type: string,
     id: string,
     served: Served,
   ): Promise<Response> {
-    const s = await need(served, 'read', type).read!(type, id);
-    return this._found(s, `${type}/${id}`, served);
+    const store = need(served, 'read', type);
+    await this._authorize(ctx, 'read', type, id);
+    const s = await store.read!(type, id, ctx.context);
+    return this._found(ctx, 'read', s, `${type}/${id}`, served);
   }
 
   private async _vread(
+    ctx: Exchange,
     type: string,
     id: string,
     vid: string,
     served: Served,
   ): Promise<Response> {
-    const s = await need(served, 'vread', type).vread!(type, id, vid);
-    return this._found(s, `${type}/${id}/_history/${vid}`, served);
+    const store = need(served, 'vread', type);
+    await this._authorize(ctx, 'vread', type, id);
+    const s = await store.vread!(type, id, vid, ctx.context);
+    return this._found(
+      ctx,
+      'vread',
+      s,
+      `${type}/${id}/_history/${vid}`,
+      served,
+    );
   }
 
-  private _found(
+  /** A resource read: 404 when there is none, or the caller may not see it; 410 when deleted */
+  private async _found(
+    ctx: Exchange,
+    interaction: FhirInteraction,
     s: StoredResource | undefined,
     what: string,
     served: Served,
-  ): Response {
+  ): Promise<Response> {
     if (!s) throw new FhirServerError(404, `${what} is not known`, 'not-found');
+    if (s.resource && !(await this._may(ctx, interaction, s.type, s.resource)))
+      throw new FhirServerError(404, `${what} is not known`, 'not-found');
     if (!s.resource)
       throw new FhirServerError(410, `${what} was deleted`, 'deleted');
     return jsonResponse(200, this._text(s), versionHeaders(s, served));
@@ -339,7 +387,9 @@ export class FhirServer {
     served: Served,
   ): Promise<Response> {
     const store = need(served, 'create', type);
+    await this._authorize(ctx, 'create', type);
     const { id: _ignored, ...resource } = await this._body(ctx, type);
+    await this._guardWrite(ctx, 'create', type, undefined, resource, served);
     // If-None-Exist: create only when the criteria find nothing
     const ifNoneExist = ctx.request.headers.get('If-None-Exist');
     if (ifNoneExist !== null) {
@@ -349,6 +399,7 @@ export class FhirServer {
         type,
         served,
         'Conditional create',
+        'create',
       );
       if (found.length > 1)
         throw new FhirServerError(
@@ -359,7 +410,7 @@ export class FhirServer {
       if (found.length === 1)
         return this._written(ctx, { ...found[0], method: 'PUT' }, 200, served);
     }
-    const s = await store.create!(type, resource);
+    const s = await store.create!(type, resource, ctx.context);
     return this._written(ctx, s, 201, served);
   }
 
@@ -370,6 +421,7 @@ export class FhirServer {
     served: Served,
   ): Promise<Response> {
     need(served, 'update', type);
+    await this._authorize(ctx, 'update', type, id);
     const resource = await this._body(ctx, type);
     if (resource.id === undefined)
       throw new FhirServerError(
@@ -383,22 +435,29 @@ export class FhirServer {
         `The ${type}'s id ${resource.id} is not the id of the URL, ${id}`,
         'invalid',
       );
-    return this._store(ctx, type, id, resource, served);
+    return this._store(ctx, 'update', type, id, resource, served);
   }
 
-  /** Writes a checked resource by update; 405 when the id does not exist and the store does not create by update */
+  /**
+   * Writes a checked resource by update, when the caller may (the one it
+   * replaces, and it); 405 when the id does not exist and the store does
+   * not create by update
+   */
   private async _store(
     ctx: Exchange,
+    interaction: FhirInteraction,
     type: string,
     id: string,
     resource: Record<string, any>,
     served: Served,
   ): Promise<Response> {
+    await this._guardWrite(ctx, interaction, type, id, resource, served);
     const s = await served.store.update!(
       type,
       id,
       resource,
       ifMatchOf(ctx.request, served),
+      ctx.context,
     );
     if (!s)
       throw new FhirServerError(
@@ -419,6 +478,7 @@ export class FhirServer {
     served: Served,
   ): Promise<Response> {
     need(served, 'update', type);
+    await this._authorize(ctx, 'update', type);
     const resource = await this._body(ctx, type);
     const found = await this._matchesOf(
       ctx,
@@ -426,6 +486,7 @@ export class FhirServer {
       type,
       served,
       'Conditional update',
+      'update',
     );
     if (found.length > 1)
       throw new FhirServerError(
@@ -441,13 +502,19 @@ export class FhirServer {
           `The ${type}'s id ${resource.id} is not the id of the ${type} the criteria find, ${id}`,
           'invalid',
         );
-      return this._store(ctx, type, id, { ...resource, id }, served);
+      return this._store(ctx, 'update', type, id, { ...resource, id }, served);
     }
     // nothing found: created, with the id of the body when there is one
     if (resource.id !== undefined)
-      return this._store(ctx, type, resource.id, resource, served);
+      return this._store(ctx, 'update', type, resource.id, resource, served);
     const store = need(served, 'create', type);
-    return this._written(ctx, await store.create!(type, resource), 201, served);
+    await this._guardWrite(ctx, 'update', type, undefined, resource, served);
+    return this._written(
+      ctx,
+      await store.create!(type, resource, ctx.context),
+      201,
+      served,
+    );
   }
 
   private async _delete(
@@ -457,7 +524,9 @@ export class FhirServer {
     served: Served,
   ): Promise<Response> {
     const store = need(served, 'delete', type);
-    await store.delete!(type, id, ifMatchOf(ctx.request, served));
+    await this._authorize(ctx, 'delete', type, id);
+    await this._guardWrite(ctx, 'delete', type, id, undefined, served);
+    await store.delete!(type, id, ifMatchOf(ctx.request, served), ctx.context);
     return new Response(null, { status: 204 });
   }
 
@@ -468,12 +537,14 @@ export class FhirServer {
     served: Served,
   ): Promise<Response> {
     const store = need(served, 'delete', type);
+    await this._authorize(ctx, 'delete', type);
     const found = await this._matchesOf(
       ctx,
       ctx.url.search.slice(1),
       type,
       served,
       'Conditional delete',
+      'delete',
     );
     if (found.length > 1)
       throw new FhirServerError(
@@ -482,7 +553,12 @@ export class FhirServer {
         'multiple-matches',
       );
     if (found.length === 1)
-      await store.delete!(type, found[0].id, ifMatchOf(ctx.request, served));
+      await store.delete!(
+        type,
+        found[0].id,
+        ifMatchOf(ctx.request, served),
+        ctx.context,
+      );
     return new Response(null, { status: 204 });
   }
 
@@ -499,6 +575,7 @@ export class FhirServer {
   ): Promise<Response> {
     need(served, 'read', type);
     need(served, 'update', type);
+    await this._authorize(ctx, 'patch', type, id);
     const mediaType = mediaTypeOf(ctx.request.headers.get('Content-Type'));
     if (mediaType !== 'application/json-patch+json')
       throw new FhirServerError(
@@ -519,6 +596,7 @@ export class FhirServer {
         type,
         served,
         'Conditional patch',
+        'patch',
       );
       if (found.length !== 1)
         throw new FhirServerError(
@@ -528,8 +606,12 @@ export class FhirServer {
         );
       id = found[0].id;
     }
-    const current = await served.store.read!(type, id);
-    if (!current)
+    const current = await served.store.read!(type, id, ctx.context);
+    if (
+      !current ||
+      (current.resource &&
+        !(await this._may(ctx, 'patch', type, current.resource)))
+    )
       throw new FhirServerError(404, `${type}/${id} is not known`, 'not-found');
     if (!current.resource)
       throw new FhirServerError(410, `${type}/${id} was deleted`, 'deleted');
@@ -548,7 +630,14 @@ export class FhirServer {
         `The patch must leave a ${type} with the id ${id}`,
         'processing',
       );
-    return this._store(ctx, type, id, this._checked(patched, type), served);
+    return this._store(
+      ctx,
+      'patch',
+      type,
+      id,
+      this._checked(patched, type),
+      served,
+    );
   }
 
   /**
@@ -557,6 +646,7 @@ export class FhirServer {
    * `profile` name; nothing is stored. Always 200 with an OperationOutcome.
    */
   private async _validate(ctx: Exchange, type: string): Promise<Response> {
+    await this._authorize(ctx, 'validate', type);
     const mediaType = mediaTypeOf(ctx.request.headers.get('Content-Type'));
     if (!mediaType || !JSON_TYPES.has(mediaType))
       throw new FhirServerError(
@@ -645,6 +735,7 @@ export class FhirServer {
     id: string | undefined,
   ): Promise<Response> {
     const store = need(served, 'history', type ?? 'the server');
+    await this._authorize(ctx, 'history', type, id);
     const q = ctx.url.searchParams;
     const count = Math.min(
       intParam(q, '_count') ?? this.options.defaultCount ?? 50,
@@ -658,7 +749,21 @@ export class FhirServer {
         `_since: "${since}" is not an instant`,
         'value',
       );
-    const page = await store.history!(type, id, { since, count, offset });
+    const page = await store.history!(
+      type,
+      id,
+      { since, count, offset },
+      ctx.context,
+    );
+    // the versions the caller may not see are left out (a deleted one, which
+    // cannot be checked, too, when the authorizer checks resources)
+    if (this.options.security?.authorizer?.authorizeResource) {
+      const kept: StoredVersion[] = [];
+      for (const v of page.items)
+        if (v.resource && (await this._may(ctx, 'history', v.type, v.resource)))
+          kept.push(v);
+      page.items = kept;
+    }
 
     const path = `${ctx.baseUrl}/${[type, id, '_history'].filter(Boolean).join('/')}`;
     const link = (rel: string, at: number) => {
@@ -727,6 +832,7 @@ export class FhirServer {
     const strict = /(?:^|[;,\s])handling=strict\b/.test(
       ctx.request.headers.get('Prefer') ?? '',
     );
+    const decision = await this._authorize(ctx, 'search', type);
     const { query, applied } = this._query(
       params,
       type,
@@ -734,9 +840,20 @@ export class FhirServer {
       ctx.baseUrl,
       strict,
     );
+    // the authorizer's criteria: AND, read strictly, not in the links
+    if (decision?.criteria)
+      query.criteria.push(
+        ...this._query(
+          new URLSearchParams(decision.criteria),
+          type,
+          served,
+          ctx.baseUrl,
+          true,
+        ).query.criteria,
+      );
     const { count, offset } = query;
     const baseUrl = ctx.baseUrl;
-    const page = await store.search!(type, query);
+    const page = await store.search!(type, query, ctx.context);
 
     const link = (rel: string, at: number) => {
       const p = new URLSearchParams(applied);
@@ -849,6 +966,7 @@ export class FhirServer {
     type: string,
     served: Served,
     what: string,
+    interaction: FhirInteraction,
   ): Promise<StoredResource[]> {
     const params = new URLSearchParams(criteria);
     if (!params.size)
@@ -869,8 +987,111 @@ export class FhirServer {
     const { query } = this._query(params, type, served, ctx.baseUrl, true);
     query.count = 2;
     query.offset = 0;
-    const page = await served.store.search(type, query);
-    return page.items;
+    const page = await served.store.search(type, query, ctx.context);
+    const found: StoredResource[] = [];
+    for (const s of page.items)
+      if (s.resource && (await this._may(ctx, interaction, type, s.resource)))
+        found.push(s);
+    return found;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Security                                                         */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * The caller: the first authenticator that finds one (a refusal stops
+   * the chain with 401). Without one, 401 with every challenge, or nobody
+   * with anonymous. Undefined on a server without security.
+   */
+  private async _authenticate(
+    ctx: Exchange,
+  ): Promise<FhirPrincipal | undefined> {
+    const security = this.options.security;
+    if (!security) return;
+    for (const a of security.authenticators) {
+      const p = await a.authenticate(ctx.request, { baseUrl: ctx.baseUrl });
+      if (p) return p;
+    }
+    if (security.anonymous) return;
+    const e = new FhirServerError(401, 'Authentication is required', 'login');
+    const challenges = security.authenticators
+      .map(a => a.challenge)
+      .filter((c): c is string => !!c);
+    e.headers = { 'WWW-Authenticate': challenges.join(', ') || 'Bearer' };
+    throw e;
+  }
+
+  /** The authorizer's decision (403 when not allowed); undefined without one */
+  private async _authorize(
+    ctx: Exchange,
+    interaction: FhirInteraction,
+    type?: string,
+    id?: string,
+  ): Promise<FhirAccessDecision | undefined> {
+    const authorizer = this.options.security?.authorizer;
+    if (!authorizer) return;
+    const d = await authorizer.authorize({
+      principal: ctx.context.principal,
+      interaction,
+      type,
+      id,
+    });
+    if (!d.allowed)
+      throw new FhirServerError(
+        403,
+        d.reason ?? `${interaction} of ${type ?? 'the server'} is not allowed`,
+        'forbidden',
+      );
+    return d;
+  }
+
+  /** Whether the caller may see or write a resource (every one, without an authorizer that checks) */
+  private async _may(
+    ctx: Exchange,
+    interaction: FhirInteraction,
+    type: string,
+    resource: Record<string, any>,
+  ): Promise<boolean> {
+    const authorizer = this.options.security?.authorizer;
+    if (!authorizer?.authorizeResource) return true;
+    return authorizer.authorizeResource(
+      { principal: ctx.context.principal, interaction, type, id: resource.id },
+      resource,
+    );
+  }
+
+  /**
+   * Before a write: the resource it replaces (404 when the caller may not
+   * see it) and the resource written (403 when they may not write it)
+   */
+  private async _guardWrite(
+    ctx: Exchange,
+    interaction: FhirInteraction,
+    type: string,
+    id: string | undefined,
+    resource: Record<string, any> | undefined,
+    served: Served,
+  ): Promise<void> {
+    if (!this.options.security?.authorizer?.authorizeResource) return;
+    if (id !== undefined && typeof served.store.read === 'function') {
+      const current = await served.store.read(type, id, ctx.context);
+      if (
+        current?.resource &&
+        !(await this._may(ctx, interaction, type, current.resource))
+      )
+        throw new FhirServerError(
+          404,
+          `${type}/${id} is not known`,
+          'not-found',
+        );
+    }
+    if (resource && !(await this._may(ctx, interaction, type, resource)))
+      throw new FhirServerError(
+        403,
+        `The ${type} is not one the caller may write`,
+        'forbidden',
+      );
   }
 
   /** The store of system history: the one store of every type served */
@@ -1013,7 +1234,41 @@ export class FhirServer {
         return r;
       },
     );
-    const rest: Record<string, any> = { mode: 'server', resource };
+    const rest: Record<string, any> = { mode: 'server' };
+    const security = this.options.security;
+    if (security) {
+      rest.security = {
+        service: [
+          {
+            coding: [
+              {
+                system:
+                  'http://terminology.hl7.org/CodeSystem/restful-security-service',
+                code: 'SMART-on-FHIR',
+              },
+            ],
+          },
+        ],
+      };
+      // the OAuth endpoints, as SMART's extension gives them
+      const smart = security.smartConfiguration ?? {};
+      const uris: [string, string][] = [];
+      for (const [url, value] of [
+        ['authorize', smart.authorization_endpoint],
+        ['token', smart.token_endpoint],
+        ['revoke', smart.revocation_endpoint],
+        ['introspect', smart.introspection_endpoint],
+      ] as const)
+        if (typeof value === 'string') uris.push([url, value]);
+      if (uris.length)
+        rest.security.extension = [
+          {
+            url: 'http://fhir-registry.smarthealthit.org/StructureDefinition/oauth-uris',
+            extension: uris.map(([url, valueUri]) => ({ url, valueUri })),
+          },
+        ];
+    }
+    rest.resource = resource;
     try {
       if (this._systemStore().caps.interactions.includes('history'))
         rest.interaction = [{ code: 'history-system' }];
@@ -1044,6 +1299,8 @@ interface Exchange {
   method: string;
   /** The server's base URL: 'http://host/fhir' */
   baseUrl: string;
+  /** What stores are told: the request, and its caller once authenticated */
+  context: FhirRequestContext;
 }
 
 /**
@@ -1189,5 +1446,5 @@ function jsonResponse(
 }
 
 function outcomeResponse(e: FhirServerError): Response {
-  return jsonResponse(e.status, JSON.stringify(e.outcome()));
+  return jsonResponse(e.status, JSON.stringify(e.outcome()), e.headers);
 }

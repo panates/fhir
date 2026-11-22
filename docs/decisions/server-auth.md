@@ -222,3 +222,50 @@ Tests: `packages/smart/test/smart.spec.ts`, 8, with keys made by Web Crypto and 
 127.0.0.1 that counts the reads of its JWK Set. Control runs: without the signature check, without
 the audience check, without the least time between reads, with concurrent reads not shared, and
 without the order of v2 letters, a test fails each time. 271 tests before, 279 after.
+
+## Built: the server's authentication and authorization (2026-11-22)
+
+`packages/server`: `security.ts` (`FhirPrincipal`, `FhirAuthenticator`, `FhirAuthorizer`,
+`FhirAccess`, `FhirAccessDecision`, `FhirRequestContext`, `checked()`), `authenticators.ts`
+(`JwtAuthenticator`, `IntrospectionAuthenticator`, `principalOf()`), and the server's
+`security` option. `SmartAuthorizer`, with the compartments, is the next step; until then an
+authorizer is the user's own, or none (every authenticated caller may do everything).
+
+Where it differs from the proposal above, and why:
+
+- **`authenticate(request, info)`** takes a second argument, `{ baseUrl }`: `JwtAuthenticator`
+  checks `aud` against the server's base URL when no audience is given, and an authenticator
+  cannot know that URL from the request alone (the server may be mounted under a path).
+- **Search results are not checked one by one** with `authorizeResource()`: the authorizer's
+  `criteria` restrict a search, so that `total` and the pages stay right. Conditional
+  interactions, which search for at most two, do check what they find, and leave out what the
+  caller may not see (a conditional update then creates rather than touches another patient's
+  record).
+- **History leaves out** the versions the caller may not see, and, when the authorizer checks
+  resources, deleted versions too, which have no resource to check.
+- **A write outside what the caller may write** answers 403; the resource it would replace, when
+  the caller may not see it, 404, as a read.
+- **`/.well-known/smart-configuration`** is served only when `smartConfiguration` is given, and
+  `metadata` always; both without authentication. The `CapabilityStatement` gets
+  `rest.security` with the `SMART-on-FHIR` service, and SMART's `oauth-uris` extension with the
+  endpoints of `smartConfiguration`.
+- **Statuses:** 401 with every authenticator's challenge (`Bearer realm="fhir", ApiKey`) when
+  nobody is authenticated; 401 with `error="invalid_token"` and the reason when a token is refused.
+- **Stores get `context`** (`{ principal, request }`) as the last argument of every method.
+
+`JwtAuthenticator`: the issuer (or one of several, whose keys are found by the token's `iss`),
+the audience (the server's base URL, or what is given, or `false`), keys by the issuer's OpenID
+configuration or a `JwksClient` given; the principal from `sub` (or `client_id`), `scope` (or
+`scp`), `patient`, `encounter`, `fhirUser`, `client_id` (or `azp`). `IntrospectionAuthenticator`:
+RFC 7662 with the server's client credentials (Basic), https only but for this machine, answers
+kept 60 s and never past the token's `exp` (a token not active, 5 s).
+
+Tests: `packages/server/test/security.spec.ts`, 11, with an issuer on 127.0.0.1 (OpenID
+configuration, JWK Set, introspection): metadata and the SMART configuration without a token; 401
+and its challenges; a JWT then a session check (the user's Redis example, with a set in memory);
+an API key for integrations; a refused token that does not fall through to the API key, and does
+not reach the session check; an authorizer of the test's own that keeps a patient's token to their
+records in search, read, history, writes and conditional updates; 403 with the authorizer's reason;
+anonymous callers; introspection with its cache. Control runs: a refused token falling through,
+a read not checked, search criteria not added, history not filtered, the resource replaced not
+checked, and `checked()` skipping its check, tests fail each time. 279 tests before, 290 after.
