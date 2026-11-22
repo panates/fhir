@@ -591,7 +591,39 @@ composites left out. Control runs: components read from the resource instead of 
 not checked, sorting by a composite allowed, composites with unknown components kept; tests
 fail each time. 323 tests before, 330 after.
 
+## Built: _summary and _elements (2026-11-22)
+
+`subset.ts` (`subsetOf()`, `subsetted()`), used by `_found()` and `_search()` in
+`fhir-server.ts`. They apply to read, vread and search, to the matches and the included
+resources; history gives whole versions.
+
+- **`_summary=true`:** the elements the model marks as summary, and within a backbone element
+  (`Observation.component`) its own summary elements; a data type is kept whole. `text`: `text`
+  and the mandatory top-level elements. `data`: all but `text`. `count`: a search gives the
+  total and the links, no entries and no includes; a read answers 400. `false`: the whole
+  resource.
+- **`_elements`:** the top-level elements named, and the mandatory ones (`min` above 0), as the
+  specification asks. `name` is an element of every type in the Bundle, `Patient.name` of
+  Patient only, as R5 writes it; `value` and `value[x]` both name a choice. An element the type
+  does not have is refused with `handling=strict` and left out otherwise; when none is known,
+  the resource comes whole.
+- **Always kept:** `resourceType`, `id`, `meta`, and with an element its primitive extensions
+  (`_birthDate`). A resource given in part gets the tag `SUBSETTED`
+  (`http://terminology.hl7.org/CodeSystem/v3-ObservationValue`) after its own tags; its ETag is
+  its version's.
+- **Refused (400):** a `_summary` value that is not one of the five, `_summary` given twice, and
+  `_summary` with `_elements` (the specification does not say how the two combine).
+- **The self link** keeps `_summary` and `_elements`, as they were given.
+
+Tests: `packages/server/test/subset.spec.ts`, 5: the summary of a Patient and of an Observation
+with components, vread, `text`, `data`, `_elements` with mandatory elements and a choice,
+`false` and unknown elements, `count` with includes, `_elements` by type over includes, the
+refusals, and the client reading the part it is given. Control runs: no summary within backbone
+elements, mandatory elements not kept, no `SUBSETTED` tag, primitive extensions dropped, entries
+with `count`, included resources whole, `_summary` read as a search parameter; tests fail each
+time. 330 tests before, 335 after.
+
 ## Not in the first version
 
-`_summary` and `_elements` on search, XML,
+XML,
 subscriptions, bulk data.
