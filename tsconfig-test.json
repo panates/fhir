@@ -15,7 +15,8 @@
       "@fhirjs/r4": ["./packages/r4/src/index.js"],
       "@fhirjs/r4b": ["./packages/r4b/src/index.js"],
       "@fhirjs/r5": ["./packages/r5/src/index.js"],
-      "@fhirjs/server": ["./packages/server/src/index.js"]
+      "@fhirjs/server": ["./packages/server/src/index.js"],
+      "@fhirjs/smart": ["./packages/smart/src/index.js"]
     }
   }
 }

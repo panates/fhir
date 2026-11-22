@@ -187,6 +187,9 @@ importers:
       '@fhirjs/server':
         specifier: workspace:*
         version: link:packages/server
+      '@fhirjs/smart':
+        specifier: workspace:*
+        version: link:packages/smart
       '@panates/tsconfig':
         specifier: ^2.1.8
         version: 2.1.8
@@ -235,6 +238,9 @@ importers:
       '@fhirjs/core':
         specifier: workspace:*
         version: link:../core
+      '@fhirjs/smart':
+        specifier: workspace:*
+        version: link:../smart
       tslib:
         specifier: ^2.9.1
         version: 2.9.1
@@ -292,6 +298,12 @@ importers:
       '@fhirjs/fhirpath':
         specifier: workspace:*
         version: link:../fhirpath
+      tslib:
+        specifier: ^2.9.1
+        version: 2.9.1
+
+  packages/smart:
+    dependencies:
       tslib:
         specifier: ^2.9.1
         version: 2.9.1

@@ -11,7 +11,7 @@
   "scripts": {
     "fetch-packages": "node support/fetch-packages.mts",
     "generate": "node support/build-models.mts --version=R4 && node support/build-models.mts --version=R4B && node support/build-models.mts --version=R5",
-    "build": "tsc -b packages/fhirpath/tsconfig-build.json packages/core/tsconfig-build.json packages/r4/tsconfig-build.json packages/r4b/tsconfig-build.json packages/r5/tsconfig-build.json packages/client/tsconfig-build.json packages/server/tsconfig-build.json",
+    "build": "tsc -b packages/smart/tsconfig-build.json packages/fhirpath/tsconfig-build.json packages/core/tsconfig-build.json packages/r4/tsconfig-build.json packages/r4b/tsconfig-build.json packages/r5/tsconfig-build.json packages/client/tsconfig-build.json packages/server/tsconfig-build.json",
     "check-types": "tsc -b",
     "examples": "tsc -p examples && node examples/build/profile/run.js",
     "test": "mocha",
@@ -26,6 +26,7 @@
     "@fhirjs/r4b": "workspace:*",
     "@fhirjs/r5": "workspace:*",
     "@fhirjs/server": "workspace:*",
+    "@fhirjs/smart": "workspace:*",
     "@panates/tsconfig": "^2.1.8",
     "@swc-node/register": "^1.12.1",
     "@swc/core": "^1.16.22",
