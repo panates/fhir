@@ -55,7 +55,7 @@ describe('R4 examples (hl7.fhir.r4.examples)', function () {
     if (!hasPackage(R4_EXAMPLES)) this.skip();
   });
 
-  it('decodes and encodes every valid example back to its source', () => {
+  it('decodes and encodes every valid example back to its source #slow', () => {
     const fhir = new FhirContext(r4Model);
     const differ: string[] = [];
     const failed: Record<string, string> = {};
@@ -80,7 +80,7 @@ describe('R4 examples (hl7.fhir.r4.examples)', function () {
     expect(ok).toBe(5296);
   });
 
-  it('keeps the precision of decimals through decode(text) and stringify()', () => {
+  it('keeps the precision of decimals through decode(text) and stringify() #slow', () => {
     const fhir = new FhirContext(r4Model);
     let files = 0;
     let numbers = 0;

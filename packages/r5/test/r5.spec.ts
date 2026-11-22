@@ -82,14 +82,14 @@ describe('R5', () => {
       if (!hasPackage(R5_EXAMPLES)) this.skip();
     });
 
-    it('decodes and encodes every example back to its source', () => {
+    it('decodes and encodes every example back to its source #slow', () => {
       const { ok, failed, differ } = roundTripExamples(fhir, R5_EXAMPLES);
       expect(differ).toEqual([]);
       expect(failed).toEqual({});
       expect(ok).toBe(2822);
     });
 
-    it('keeps the precision of decimals through decode(text) and stringify()', () => {
+    it('keeps the precision of decimals through decode(text) and stringify() #slow', () => {
       const { lost } = decimalPrecision(fhir, R5_EXAMPLES);
       expect(lost).toEqual([]);
     });
