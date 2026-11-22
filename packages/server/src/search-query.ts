@@ -166,6 +166,8 @@ export const RESULT_PARAMS = new Set([
   '_revinclude',
   '_include:iterate',
   '_revinclude:iterate',
+  '_summary',
+  '_elements',
 ]);
 
 /** A prefix at the start of a value followed by a digit (or a sign), and the rest */

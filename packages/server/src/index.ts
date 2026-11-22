@@ -5,6 +5,7 @@ export * from './search-match.js';
 export * from './search-query.js';
 export * from './memory-store.js';
 export * from './routing-store.js';
+export * from './subset.js';
 export * from './node-listener.js';
 export * from './authenticators.js';
 export * from './security.js';

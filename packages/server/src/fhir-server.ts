@@ -33,6 +33,7 @@ import {
   type SearchValue,
   type SearchSort,
 } from './search-query.js';
+import { subsetOf, subsetted } from './subset.js';
 
 /** A step around each exchange: (request, next) => response, as in the client */
 export type FhirServerInterceptor = (
@@ -728,7 +729,25 @@ export class FhirServer {
       throw new FhirServerError(404, `${what} is not known`, 'not-found');
     if (!s.resource)
       throw new FhirServerError(410, `${what} was deleted`, 'deleted');
-    return jsonResponse(200, this._text(s), versionHeaders(s, served));
+    const subset = subsetOf(
+      ctx.url.searchParams,
+      this.fhir,
+      s.type,
+      isStrict(ctx.request),
+    );
+    if (subset?.summary === 'count')
+      throw new FhirServerError(
+        400,
+        '_summary=count is for a search, not a read',
+        'not-supported',
+      );
+    return jsonResponse(
+      200,
+      subset
+        ? JSON.stringify(subsetted(this._json(s), subset, this.fhir))
+        : this._text(s),
+      versionHeaders(s, served),
+    );
   }
 
   private async _create(
@@ -1183,9 +1202,8 @@ export class FhirServer {
       for (const [k, v] of new URLSearchParams(await ctx.request.text()))
         params.append(k, v);
     }
-    const strict = /(?:^|[;,\s])handling=strict\b/.test(
-      ctx.request.headers.get('Prefer') ?? '',
-    );
+    const strict = isStrict(ctx.request);
+    const subset = subsetOf(params, this.fhir, type, strict);
     const decision = await this._authorize(ctx, 'search', type);
     const { query, applied } = this._query(
       params,
@@ -1206,7 +1224,13 @@ export class FhirServer {
         ).query.criteria,
       );
     await this._authorizeChains(ctx, query.criteria);
-    const includes = this._includeSpecs(params, strict, applied);
+    const includes =
+      subset?.summary === 'count'
+        ? []
+        : this._includeSpecs(params, strict, applied);
+    if (subset)
+      for (const name of ['_summary', '_elements'])
+        for (const v of params.getAll(name)) applied.append(name, v);
     const { count, offset } = query;
     const baseUrl = ctx.baseUrl;
     const page = await store.search!(type, query, ctx.context);
@@ -1233,15 +1257,19 @@ export class FhirServer {
     };
     if (page.total !== undefined) bundle.total = page.total;
     bundle.link = links;
+    // _summary=count: the total alone
+    const matches = subset?.summary === 'count' ? [] : page.items;
+    const json = (s: StoredResource) =>
+      subset ? subsetted(this._json(s), subset, this.fhir) : this._json(s);
     const entry = [
-      ...page.items.map(s => ({
+      ...matches.map(s => ({
         fullUrl: `${baseUrl}/${s.type}/${s.id}`,
-        resource: this._json(s),
+        resource: json(s),
         search: { mode: 'match' },
       })),
       ...included.items.map(s => ({
         fullUrl: `${baseUrl}/${s.type}/${s.id}`,
-        resource: this._json(s),
+        resource: json(s),
         search: { mode: 'include' },
       })),
     ];
@@ -2046,6 +2074,13 @@ interface Exchange {
   tx?: FhirStore;
   /** The id a transaction gave the resource an entry creates */
   assignedId?: string;
+}
+
+/** Prefer: handling=strict: unknown parameters are refused, not left out */
+function isStrict(request: Request): boolean {
+  return /(?:^|[;,\s])handling=strict\b/.test(
+    request.headers.get('Prefer') ?? '',
+  );
 }
 
 /** The method of a batch or transaction entry, its URL checked (400 otherwise) */
