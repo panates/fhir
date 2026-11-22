@@ -37,7 +37,10 @@ const response = await server.handle(
 
 It answers `metadata`, `read`, `vread`, `create`, `update` (and update as create), `delete`
 and `history` of an instance, a type and the server, with `ETag`, `If-Match`, `Location` and
-`Prefer: return=`. A resource that is not valid is refused with 422 and its issues.
+`Prefer: return=`. A resource that is not valid is refused with 422 and its issues. Create, update,
+delete and patch also come conditional (`If-None-Exist`, `PUT [type]?criteria`), `PATCH` takes a
+JSON Patch, and `POST [type]/$validate` checks a resource against the model and a profile
+without storing it.
 
 Search (`GET [type]?...`, `POST [type]/_search`) takes the token, string, date, reference,
 number, quantity and uri parameters of the version, with their modifiers and prefixes, sorts

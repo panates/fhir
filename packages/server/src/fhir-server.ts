@@ -11,6 +11,7 @@ import type {
   StoredResource,
   StoredVersion,
 } from './fhir-store.js';
+import { applyJsonPatch } from './json-patch.js';
 import { SearchMatcher } from './search-match.js';
 import {
   parseCriterion,
@@ -214,6 +215,14 @@ export class FhirServer {
       if (method !== 'GET') throw notAllowed(method, '_history');
       return this._history(ctx, this._systemStore(), undefined, undefined);
     }
+    if (
+      seg.length === 2 &&
+      seg[1] === '$validate' &&
+      this._served.has(seg[0])
+    ) {
+      if (method !== 'POST') throw notAllowed(method, `${seg[0]}/$validate`);
+      return this._validate(ctx, seg[0]);
+    }
     if (seg[0].startsWith('$') || seg.some(s => s.startsWith('$')))
       throw new FhirServerError(
         404,
@@ -248,6 +257,15 @@ export class FhirServer {
       case 1:
         if (method === 'POST') return this._create(ctx, type, served);
         if (method === 'GET') return this._search(ctx, type, served);
+        // conditional interactions: [type]?criteria
+        if (ctx.url.search.length > 1) {
+          if (method === 'PUT')
+            return this._conditionalUpdate(ctx, type, served);
+          if (method === 'DELETE')
+            return this._conditionalDelete(ctx, type, served);
+          if (method === 'PATCH')
+            return this._patch(ctx, type, undefined, served);
+        }
         throw notAllowed(method, type);
       case 2:
         if (id === '_search') {
@@ -261,6 +279,7 @@ export class FhirServer {
         if (method === 'GET') return this._read(type, id, served);
         if (method === 'PUT') return this._update(ctx, type, id, served);
         if (method === 'DELETE') return this._delete(ctx, type, id, served);
+        if (method === 'PATCH') return this._patch(ctx, type, id, served);
         throw notAllowed(method, `${type}/${id}`);
       case 3:
         if (op !== '_history') break;
@@ -321,6 +340,25 @@ export class FhirServer {
   ): Promise<Response> {
     const store = need(served, 'create', type);
     const { id: _ignored, ...resource } = await this._body(ctx, type);
+    // If-None-Exist: create only when the criteria find nothing
+    const ifNoneExist = ctx.request.headers.get('If-None-Exist');
+    if (ifNoneExist !== null) {
+      const found = await this._matchesOf(
+        ctx,
+        ifNoneExist.replace(/^\?/, ''),
+        type,
+        served,
+        'Conditional create',
+      );
+      if (found.length > 1)
+        throw new FhirServerError(
+          412,
+          `If-None-Exist: ${ifNoneExist} finds more than one ${type}`,
+          'multiple-matches',
+        );
+      if (found.length === 1)
+        return this._written(ctx, { ...found[0], method: 'PUT' }, 200, served);
+    }
     const s = await store.create!(type, resource);
     return this._written(ctx, s, 201, served);
   }
@@ -331,7 +369,7 @@ export class FhirServer {
     id: string,
     served: Served,
   ): Promise<Response> {
-    const store = need(served, 'update', type);
+    need(served, 'update', type);
     const resource = await this._body(ctx, type);
     if (resource.id === undefined)
       throw new FhirServerError(
@@ -345,7 +383,18 @@ export class FhirServer {
         `The ${type}'s id ${resource.id} is not the id of the URL, ${id}`,
         'invalid',
       );
-    const s = await store.update!(
+    return this._store(ctx, type, id, resource, served);
+  }
+
+  /** Writes a checked resource by update; 405 when the id does not exist and the store does not create by update */
+  private async _store(
+    ctx: Exchange,
+    type: string,
+    id: string,
+    resource: Record<string, any>,
+    served: Served,
+  ): Promise<Response> {
+    const s = await served.store.update!(
       type,
       id,
       resource,
@@ -360,6 +409,47 @@ export class FhirServer {
     return this._written(ctx, s, s.method === 'POST' ? 201 : 200, served);
   }
 
+  /**
+   * PUT [type]?criteria: updates the one resource the criteria find, creates
+   * one when they find none, refuses (412) when they find more
+   */
+  private async _conditionalUpdate(
+    ctx: Exchange,
+    type: string,
+    served: Served,
+  ): Promise<Response> {
+    need(served, 'update', type);
+    const resource = await this._body(ctx, type);
+    const found = await this._matchesOf(
+      ctx,
+      ctx.url.search.slice(1),
+      type,
+      served,
+      'Conditional update',
+    );
+    if (found.length > 1)
+      throw new FhirServerError(
+        412,
+        `${ctx.url.search} finds more than one ${type}`,
+        'multiple-matches',
+      );
+    if (found.length === 1) {
+      const id = found[0].id;
+      if (resource.id !== undefined && resource.id !== id)
+        throw new FhirServerError(
+          400,
+          `The ${type}'s id ${resource.id} is not the id of the ${type} the criteria find, ${id}`,
+          'invalid',
+        );
+      return this._store(ctx, type, id, { ...resource, id }, served);
+    }
+    // nothing found: created, with the id of the body when there is one
+    if (resource.id !== undefined)
+      return this._store(ctx, type, resource.id, resource, served);
+    const store = need(served, 'create', type);
+    return this._written(ctx, await store.create!(type, resource), 201, served);
+  }
+
   private async _delete(
     ctx: Exchange,
     type: string,
@@ -369,6 +459,146 @@ export class FhirServer {
     const store = need(served, 'delete', type);
     await store.delete!(type, id, ifMatchOf(ctx.request, served));
     return new Response(null, { status: 204 });
+  }
+
+  /** DELETE [type]?criteria: the one resource they find; 412 when they find more */
+  private async _conditionalDelete(
+    ctx: Exchange,
+    type: string,
+    served: Served,
+  ): Promise<Response> {
+    const store = need(served, 'delete', type);
+    const found = await this._matchesOf(
+      ctx,
+      ctx.url.search.slice(1),
+      type,
+      served,
+      'Conditional delete',
+    );
+    if (found.length > 1)
+      throw new FhirServerError(
+        412,
+        `${ctx.url.search} finds more than one ${type}`,
+        'multiple-matches',
+      );
+    if (found.length === 1)
+      await store.delete!(type, found[0].id, ifMatchOf(ctx.request, served));
+    return new Response(null, { status: 204 });
+  }
+
+  /**
+   * PATCH [type]/[id] (or [type]?criteria: the one resource they find) with
+   * a JSON Patch: applied to the current version, then checked and written
+   * as an update
+   */
+  private async _patch(
+    ctx: Exchange,
+    type: string,
+    id: string | undefined,
+    served: Served,
+  ): Promise<Response> {
+    need(served, 'read', type);
+    need(served, 'update', type);
+    const mediaType = mediaTypeOf(ctx.request.headers.get('Content-Type'));
+    if (mediaType !== 'application/json-patch+json')
+      throw new FhirServerError(
+        415,
+        `A patch is sent as application/json-patch+json, not ${mediaType || 'no content type'}`,
+        'not-supported',
+      );
+    let patch: unknown;
+    try {
+      patch = parseFhirJson(await ctx.request.text());
+    } catch {
+      throw new FhirServerError(400, 'The patch is not JSON', 'structure');
+    }
+    if (id === undefined) {
+      const found = await this._matchesOf(
+        ctx,
+        ctx.url.search.slice(1),
+        type,
+        served,
+        'Conditional patch',
+      );
+      if (found.length !== 1)
+        throw new FhirServerError(
+          found.length ? 412 : 404,
+          `${ctx.url.search} finds ${found.length ? 'more than one' : 'no'} ${type}`,
+          found.length ? 'multiple-matches' : 'not-found',
+        );
+      id = found[0].id;
+    }
+    const current = await served.store.read!(type, id);
+    if (!current)
+      throw new FhirServerError(404, `${type}/${id} is not known`, 'not-found');
+    if (!current.resource)
+      throw new FhirServerError(410, `${type}/${id} was deleted`, 'deleted');
+    const patched = applyJsonPatch(
+      parseFhirJson(this._text(current)),
+      patch,
+    ) as Record<string, any>;
+    if (
+      !patched ||
+      typeof patched !== 'object' ||
+      patched.resourceType !== type ||
+      patched.id !== id
+    )
+      throw new FhirServerError(
+        422,
+        `The patch must leave a ${type} with the id ${id}`,
+        'processing',
+      );
+    return this._store(ctx, type, id, this._checked(patched, type), served);
+  }
+
+  /**
+   * POST [type]/$validate: the issues of a resource (or of the `resource`
+   * of a Parameters), against the model and the profiles meta.profile and
+   * `profile` name; nothing is stored. Always 200 with an OperationOutcome.
+   */
+  private async _validate(ctx: Exchange, type: string): Promise<Response> {
+    const mediaType = mediaTypeOf(ctx.request.headers.get('Content-Type'));
+    if (!mediaType || !JSON_TYPES.has(mediaType))
+      throw new FhirServerError(
+        415,
+        `A resource is sent as ${FHIR_JSON}, not ${mediaType || 'no content type'}`,
+        'not-supported',
+      );
+    let body: any;
+    try {
+      body = parseFhirJson(await ctx.request.text());
+    } catch {
+      throw new FhirServerError(400, 'The body is not JSON', 'structure');
+    }
+    const profiles = ctx.url.searchParams.getAll('profile');
+    if (body?.resourceType === 'Parameters' && type !== 'Parameters') {
+      const params: any[] = Array.isArray(body.parameter) ? body.parameter : [];
+      for (const p of params)
+        if (p?.name === 'profile') {
+          const v = p.valueUri ?? p.valueCanonical;
+          if (typeof v === 'string') profiles.push(v);
+        }
+      body = params.find(p => p?.name === 'resource')?.resource;
+    }
+    if (!body || typeof body !== 'object' || body.resourceType !== type)
+      throw new FhirServerError(
+        400,
+        `$validate takes a ${type}, or a Parameters with a ${type} as resource`,
+        'invalid',
+      );
+    for (const url of profiles)
+      if (!this.fhir.model.findProfile(url))
+        throw new FhirServerError(
+          400,
+          `profile: ${url} is not known to the server`,
+          'not-supported',
+        );
+    const result = this.fhir.validate(
+      body,
+      undefined,
+      profiles.length ? { profile: profiles } : {},
+    );
+    return jsonResponse(200, JSON.stringify(result.outcome()));
   }
 
   /** The answer to a create or update, as the Prefer header asks */
@@ -497,6 +727,56 @@ export class FhirServer {
     const strict = /(?:^|[;,\s])handling=strict\b/.test(
       ctx.request.headers.get('Prefer') ?? '',
     );
+    const { query, applied } = this._query(
+      params,
+      type,
+      served,
+      ctx.baseUrl,
+      strict,
+    );
+    const { count, offset } = query;
+    const baseUrl = ctx.baseUrl;
+    const page = await store.search!(type, query);
+
+    const link = (rel: string, at: number) => {
+      const p = new URLSearchParams(applied);
+      p.set('_count', String(count));
+      if (at) p.set('_offset', String(at));
+      return { relation: rel, url: `${baseUrl}/${type}?${p}` };
+    };
+    const more =
+      page.total !== undefined
+        ? offset + count < page.total
+        : page.items.length === count;
+    const links = [link('self', offset)];
+    if (count && more) links.push(link('next', offset + count));
+    if (offset) links.push(link('previous', Math.max(0, offset - count)));
+    const bundle: Record<string, any> = {
+      resourceType: 'Bundle',
+      type: 'searchset',
+    };
+    if (page.total !== undefined) bundle.total = page.total;
+    bundle.link = links;
+    if (page.items.length)
+      bundle.entry = page.items.map(s => ({
+        fullUrl: `${baseUrl}/${s.type}/${s.id}`,
+        resource: this._json(s),
+        search: { mode: 'match' },
+      }));
+    return jsonResponse(200, JSON.stringify(bundle));
+  }
+
+  /**
+   * The search a URL's parameters ask for, and the parameters applied (for
+   * the links). Unknown parameters are left out, or refused when strict.
+   */
+  private _query(
+    params: URLSearchParams,
+    type: string,
+    served: Served,
+    baseUrl: string,
+    strict: boolean,
+  ): { query: SearchQuery; applied: URLSearchParams } {
     const isResourceType = (name: string) =>
       this.fhir.model.resourceTypes().includes(name);
     const criteria: SearchCriterion[] = [];
@@ -546,7 +826,6 @@ export class FhirServer {
       this.options.maxCount ?? 500,
     );
     const offset = intParam(params, '_offset') ?? 0;
-    const baseUrl = ctx.baseUrl;
     const query: SearchQuery = {
       type,
       criteria,
@@ -556,34 +835,42 @@ export class FhirServer {
       matches: resource => this._matcher.matches(resource, criteria, baseUrl),
       compare: (a, b) => this._matcher.compare(a, b, sort),
     };
-    const page = await store.search!(type, query);
+    return { query, applied };
+  }
 
-    const link = (rel: string, at: number) => {
-      const p = new URLSearchParams(applied);
-      p.set('_count', String(count));
-      if (at) p.set('_offset', String(at));
-      return { relation: rel, url: `${baseUrl}/${type}?${p}` };
-    };
-    const more =
-      page.total !== undefined
-        ? offset + count < page.total
-        : page.items.length === count;
-    const links = [link('self', offset)];
-    if (count && more) links.push(link('next', offset + count));
-    if (offset) links.push(link('previous', Math.max(0, offset - count)));
-    const bundle: Record<string, any> = {
-      resourceType: 'Bundle',
-      type: 'searchset',
-    };
-    if (page.total !== undefined) bundle.total = page.total;
-    bundle.link = links;
-    if (page.items.length)
-      bundle.entry = page.items.map(s => ({
-        fullUrl: `${baseUrl}/${s.type}/${s.id}`,
-        resource: this._json(s),
-        search: { mode: 'match' },
-      }));
-    return jsonResponse(200, JSON.stringify(bundle));
+  /**
+   * The resources a conditional interaction's criteria find, two at most
+   * (one is all it needs to know). The criteria are read strictly: an
+   * unknown parameter would widen them. 405 when the store cannot search.
+   */
+  private async _matchesOf(
+    ctx: Exchange,
+    criteria: string,
+    type: string,
+    served: Served,
+    what: string,
+  ): Promise<StoredResource[]> {
+    const params = new URLSearchParams(criteria);
+    if (!params.size)
+      throw new FhirServerError(
+        400,
+        `${what} needs search criteria`,
+        'required',
+      );
+    if (
+      !served.caps.interactions.includes('search') ||
+      typeof served.store.search !== 'function'
+    )
+      throw new FhirServerError(
+        405,
+        `${what} is not supported for ${type}: its store cannot search`,
+        'not-supported',
+      );
+    const { query } = this._query(params, type, served, ctx.baseUrl, true);
+    query.count = 2;
+    query.offset = 0;
+    const page = await served.store.search(type, query);
+    return page.items;
   }
 
   /** The store of system history: the one store of every type served */
@@ -605,6 +892,14 @@ export class FhirServer {
 
   /** The resource of a write, checked against the model; its JSON form */
   private async _body(
+    ctx: Exchange,
+    type: string,
+  ): Promise<Record<string, any>> {
+    return this._checked(await this._readResource(ctx, type), type);
+  }
+
+  /** The body: a JSON resource of the type, not yet checked */
+  private async _readResource(
     ctx: Exchange,
     type: string,
   ): Promise<Record<string, any>> {
@@ -630,6 +925,14 @@ export class FhirServer {
         `The body is a ${json.resourceType ?? 'resource without resourceType'}, not a ${type}`,
         'invalid',
       );
+    return json;
+  }
+
+  /** A resource checked against the model (422 with its issues), in the JSON form the model writes */
+  private _checked(
+    json: Record<string, any>,
+    type: string,
+  ): Record<string, any> {
     const result = this.fhir.validate(json);
     if (!result.valid)
       throw new FhirServerError(
@@ -675,16 +978,24 @@ export class FhirServer {
         const interactions = caps.interactions.filter(
           i => METHOD[i] && typeof store[METHOD[i]!] === 'function',
         );
+        const has = (i: FhirStoreInteraction) => interactions.includes(i);
+        const codes = interactions.flatMap(i => CAPABILITY_CODES[i]);
+        // PATCH reads the current version and writes it by update
+        if (has('read') && has('update'))
+          codes.splice(codes.indexOf('update') + 1, 0, 'patch');
         const r: Record<string, any> = {
           type,
-          interaction: interactions
-            .flatMap(i => CAPABILITY_CODES[i])
-            .map(code => ({ code })),
+          interaction: codes.map(code => ({ code })),
           versioning:
             caps.versions === 'none' ? 'no-version' : 'versioned-update',
           readHistory:
             caps.versions === 'all' && caps.interactions.includes('vread'),
           updateCreate: !!caps.updateCreate,
+          // conditional interactions search first
+          conditionalCreate: has('create') && has('search'),
+          conditionalUpdate: has('update') && has('search'),
+          conditionalDelete:
+            has('delete') && has('search') ? 'single' : 'not-supported',
         };
         if (interactions.includes('search') && params.size)
           r.searchParam = [...params.values()].map(p => ({
@@ -692,6 +1003,13 @@ export class FhirServer {
             definition: p.url,
             type: p.type,
           }));
+        r.operation = [
+          {
+            name: 'validate',
+            definition:
+              'http://hl7.org/fhir/OperationDefinition/Resource-validate',
+          },
+        ];
         return r;
       },
     );
