@@ -475,8 +475,55 @@ transactions or without `acceptsIds`, the client's `transaction()`, and `MemoryS
 wait. Control runs: no undo, no wait, the Bundle's own order, references not rewritten, ids not
 given, tests fail each time. 304 tests before, 311 after.
 
+## Chained search and includes (2026-11-22)
+
+Decided with the user:
+
+| Question | Decision | Why |
+| -------- | -------- | --- |
+| Where a chain is resolved | In the store: the chain goes to it parsed, in `SearchQuery`, and a SQL store makes it a join. A store declares `chains: true` to take them | A join is what a database does well; resolving a chain in the server would search the target type first and send its ids, which fails on a common name. |
+| Included resources the caller may not see | Left out, silently | As a read answers 404: the caller does not learn that they exist. |
+| `:iterate` | In the first version, with a limit of rounds | `MedicationRequest` → `Medication` → `Organization` is common, and the limit keeps it bounded. |
+
+## Built: chained search and includes (2026-11-22)
+
+Code: `_criterion()`, `_chainable()`, `_authorizeChains()`, `_includeSpecs()`, `_included()` in
+`fhir-server.ts`; `SearchChain` and `SearchLookup` in `search-query.ts`; chains in
+`search-match.ts`.
+
+- **Chains** (`subject:Patient.name=ali`, `patient.organization.name=acme`): a criterion with
+  `chain: { type, criteria }`, its `param` the reference parameter. Without a type, the one type
+  the parameter refers to that has the next parameter is taken; with more than one, 400 asks
+  for the type. **Reverse chains** (`_has:Observation:patient:code=x`): `has: { type, criteria }`,
+  its `param` the parameter of `has.type` that refers back. Both nest, three links at most.
+- **The store answers them** when it declares `chains: true` and the types they go to are in
+  it; otherwise they are unknown parameters (400 with `handling=strict`, left out of `self`
+  otherwise). `query.matches(resource, lookup)` follows them in memory; `MemoryStore` gives the
+  lookup (its current resources).
+- **Authorization:** each type a chain goes to is authorized as a search (403 when it is not
+  allowed), and the authorizer's criteria for it are added to the chain, so a chain finds nothing
+  the caller could not find by a search of that type. Conditional interactions do the same.
+- **`_include` and `_revinclude`** (`Type:parameter`, `Type:parameter:Target`) are done by the
+  server, for any store: an `_include` reads the resources the matches refer to (local
+  references), a `_revinclude` searches the referring type by its reference parameter. The
+  `:iterate` ones follow from the included resources too, three rounds at most. Each resource
+  comes once, with `search.mode` `include`. One the caller may not read (or search, for
+  `_revinclude`) is left out. `maxIncludes` (default 1000) bounds them; past it, an
+  OperationOutcome entry (`search.mode` `outcome`) says the rest were left out. `_include=*` and
+  other modifiers are unknown parameters.
+
+Found while testing: `_include:recurse` was read as a search parameter; every name starting
+`_include` or `_revinclude` is now a result parameter.
+
+Tests: `packages/server/test/include.spec.ts`, 8: chains and reverse chains (nested, one link
+and two), chains refused (no type, a wrong type, too long, `_has` not well formed), a store
+without chains and types in two stores, chains authorized with criteria, includes and
+revincludes (each once), `:iterate`, includes refused when strict, and included resources the
+caller may not see with `maxIncludes`. Control runs: chains not authorized, `:iterate` not
+followed, every include iterated, no dedupe, included resources unchecked, `_has` not checking
+the reference, no limit on chains, tests fail each time. 311 tests before, 319 after.
+
 ## Not in the first version
 
-Batch and transaction, `_include` and `_revinclude`, chained and reverse-chained search (`_has`),
-composite parameters, `_summary` and `_elements` on search, SMART authorization, XML,
+Composite parameters, `_summary` and `_elements` on search, XML,
 subscriptions, bulk data.

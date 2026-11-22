@@ -21,6 +21,12 @@ export interface StoreCapabilities {
   /** The parameters it can sort by */
   sort?: readonly string[];
   /**
+   * It answers chained criteria and reverse chains (`_has`) to the types it
+   * serves itself: SearchCriterion.chain and .has. Without it, they are
+   * unknown parameters for its types.
+   */
+  chains?: boolean;
+  /**
    * create() keeps the id of the resource it is given, when it has one: the
    * server gives ids itself to the new resources of a transaction, so that
    * other entries can refer to them. Without it, the store gives every id.
