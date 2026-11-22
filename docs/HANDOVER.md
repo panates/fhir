@@ -114,8 +114,9 @@ All are recorded in section 13 of the design document. In short:
    design is complete. Next: authentication and authorization, designed in
    [`decisions/server-auth.md`](decisions/server-auth.md). Built: `@fhirjs/smart`, and the
    server's authenticators (JWT, introspection, `checked()`), the authorizer interface, and
-   `SmartAuthorizer` with the compartments. Next: batch
-   and transaction, `_include` and chained search.
+   `SmartAuthorizer` with the compartments. Next: batch, then transaction, as designed in
+   "Batch and transaction" of [`decisions/server.md`](decisions/server.md); then `_include` and
+   chained search.
 2. The repository standards that still fail (`repo-check`) are GitHub settings only, the user's
    to change: merge commits only, a ruleset on `main`, read-only default workflow permission,
    Dependabot alerts, secret scanning and push protection.
