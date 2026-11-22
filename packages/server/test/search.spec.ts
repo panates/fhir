@@ -493,7 +493,7 @@ describe('FhirServer search through a store of its own', () => {
     const store = new Tckn();
     const server = new FhirServer({
       fhir,
-      stores: { Patient: store },
+      store,
       resources: ['Patient'],
     });
     const r = await server.handle(
@@ -534,7 +534,7 @@ describe('FhirServer search through a store of its own', () => {
     });
     const server = new FhirServer({
       fhir,
-      stores: { Patient: store },
+      store,
       resources: ['Patient'],
     });
     await server.handle(
@@ -562,7 +562,7 @@ describe('FhirServer search through a store of its own', () => {
       () =>
         new FhirServer({
           fhir,
-          stores: { Patient: store },
+          store,
           resources: ['Patient'],
         }),
     ).toThrow(

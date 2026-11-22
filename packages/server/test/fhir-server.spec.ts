@@ -11,6 +11,7 @@ import {
   type FhirStore,
   MemoryStore,
   nodeListener,
+  RoutingStore,
   type StoreCapabilities,
   type StoredResource,
   type StoredVersion,
@@ -441,13 +442,16 @@ class HbysPatients implements FhirStore {
   }
 }
 
-describe('FhirServer with a store per type: a facade over an existing database', () => {
+describe('FhirServer with a RoutingStore: a facade over an existing database', () => {
   let s: Running;
   const hbys = new HbysPatients();
   before(
     async () =>
       (s = await start({
-        stores: { Patient: hbys },
+        store: new RoutingStore({
+          store: new MemoryStore(),
+          routes: { Patient: hbys },
+        }),
         resources: ['Patient', 'Observation'],
       })),
   );
@@ -508,7 +512,7 @@ describe('FhirServer with a store per type: a facade over an existing database',
       '405 Patient/x does not exist, and the server does not create resources by update',
     );
     expect(await outcome(await s.fetch('_history'))).toBe(
-      '405 History of the whole server is not supported: its types are in different stores',
+      '405 history is not supported for the server',
     );
     expect(await outcome(await s.fetch('Encounter/1'))).toBe(
       '404 Resource type Encounter is not served',
@@ -537,7 +541,11 @@ describe('FhirServer with a store per type: a facade over an existing database',
       type: 'Observation',
       versioning: 'versioned-update',
     });
-    expect(cs.rest[0].interaction).toEqual([{ code: 'batch' }]);
+    // transactions run in the default store, and write nothing in the table
+    expect(cs.rest[0].interaction.map((i: any) => i.code)).toEqual([
+      'batch',
+      'transaction',
+    ]);
   });
 
   it('answers 500 when the store gives what the model cannot read, and tells onError nothing else', async () => {
@@ -562,14 +570,20 @@ describe('FhirServer: setup and interceptors', () => {
       () =>
         new FhirServer({
           fhir,
-          stores: { Patient: new HbysPatients() },
+          store: new HbysPatients(),
           resources: ['Patient', 'Observation'],
         }),
-    ).toThrow('No store serves Observation');
+    ).toThrow('The store does not serve Observation');
     expect(
       () =>
-        new FhirServer({ fhir, stores: { Observation: new HbysPatients() } }),
-    ).toThrow('The store of Observation does not serve it');
+        new FhirServer({
+          fhir,
+          store: new RoutingStore({
+            routes: { Observation: new HbysPatients() },
+          }),
+          resources: ['Observation'],
+        }),
+    ).toThrow('The store does not serve Observation');
     expect(
       () => new FhirServer({ fhir, store: new MemoryStore(), base: 'fhir' }),
     ).toThrow('base must be a path');

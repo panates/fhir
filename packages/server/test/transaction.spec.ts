@@ -285,7 +285,7 @@ describe('FhirServer: transaction', () => {
     expect((await get('Patient')).total).toBe(0);
   });
 
-  it('is refused for types not in one store with transactions, and new resources a store cannot name', async () => {
+  it('is refused by a store without transactions, and for new resources a store cannot name', async () => {
     const put = transaction({
       resource: { resourceType: 'Patient', id: 'a' },
       request: { method: 'PUT', url: 'Patient/a' },
@@ -298,29 +298,21 @@ describe('FhirServer: transaction', () => {
       update: (t, i, r, m) => memory.update(t, i, r, m),
       search: (t, q) => memory.search(t, q),
     };
-    const two = serverOf({
-      resources: ['Patient', 'Observation'],
-      stores: { Patient: new MemoryStore() },
-    });
     const none = serverOf({ store: plain, resources: ['Patient'] });
-    const answers: string[] = [];
-    for (const s of [two, none]) {
-      const r = await s.send(
-        transaction(...put.entry, {
-          request: { method: 'GET', url: 'Observation' },
-        }),
-      );
-      answers.push(`${r.status} ${r.body.issue[0].diagnostics}`);
-      const cs = await s.get('metadata');
-      expect(cs.rest[0].interaction.map((i: any) => i.code)).not.toContain(
-        'transaction',
-      );
-    }
-    expect(answers).toEqual([
-      '400 Transactions are not supported for Patient, Observation: they are not in one store that has transactions',
+    const refused = await none.send(
+      transaction(...put.entry, {
+        request: { method: 'GET', url: 'Observation' },
+      }),
+    );
+    expect(`${refused.status} ${refused.body.issue[0].diagnostics}`).toBe(
       '404 Entry 1: resource type Observation is not served',
-    ]);
-    expect((await none.send(put)).status).toBe(400);
+    );
+    expect(
+      (await none.get('metadata')).rest[0].interaction.map((i: any) => i.code),
+    ).not.toContain('transaction');
+    expect((await none.send(put)).body.issue[0].diagnostics).toBe(
+      'Transactions are not supported: the store has no transaction()',
+    );
     // the store gives ids itself: no placeholders
     const caps: StoreCapabilities = {
       ...memory.capabilities(),

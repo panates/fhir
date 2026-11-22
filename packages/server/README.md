@@ -1,10 +1,10 @@
 # @fhirjs/server
 
-FHIR REST server: a fetch-style handler over stores of your own.
+FHIR REST server: a fetch-style handler over a store of your own.
 
 It answers the REST API of one FHIR version, checking every resource it is sent against the
-model of [`@fhirjs/core`](https://www.npmjs.com/package/@fhirjs/core). Each resource type is kept
-in a store: the in-memory one, or a store of your own, which may be a facade over an existing
+model of [`@fhirjs/core`](https://www.npmjs.com/package/@fhirjs/core). The resources are kept in a
+store: the in-memory one, or a store of your own, which may be a facade over an existing
 database of another shape. A store declares what it supports; the server refuses the rest and
 says so in its `CapabilityStatement`.
 
@@ -41,8 +41,7 @@ and `history` of an instance, a type and the server, with `ETag`, `If-Match`, `L
 delete and patch also come conditional (`If-None-Exist`, `PUT [type]?criteria`), `PATCH` takes a
 JSON Patch, and `POST [type]/$validate` checks a resource against the model and a profile
 without storing it. `POST [base]` takes a batch Bundle, each entry run as a request of its own, and a transaction
-Bundle, all or nothing, when its types are in one store that has `transaction()` (the memory
-store has): new resources referred to by `urn:uuid:` and conditional references are resolved.
+Bundle, all or nothing, when the store has `transaction()` (the memory store has): new resources referred to by `urn:uuid:` and conditional references are resolved.
 
 Search (`GET [type]?...`, `POST [type]/_search`) takes the token, string, date, reference,
 number, quantity and uri parameters of the version, with their modifiers and prefixes, sorts
@@ -53,8 +52,12 @@ its own query language; the memory store matches them by the parameters' FHIRPat
 
 ### A store of your own
 
+The server takes one store. A store of your own may serve every type, or some types next to a
+FHIR store through `RoutingStore`: chains and `_has` then go only to types of the same store, and
+a transaction runs in the default store, reading the others without writing them.
+
 ```ts
-import type { FhirStore } from '@fhirjs/server';
+import { type FhirStore, MemoryStore, RoutingStore } from '@fhirjs/server';
 
 const patients: FhirStore = {
   // read only, and the table keeps no versions
@@ -80,8 +83,10 @@ const patients: FhirStore = {
 
 new FhirServer({
   fhir,
-  store: new MemoryStore(),
-  stores: { Patient: patients },
+  store: new RoutingStore({
+    store: new MemoryStore(),
+    routes: { Patient: patients },
+  }),
 });
 ```
 

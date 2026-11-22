@@ -22,7 +22,7 @@ Three changes to the store design follow, taken with the user:
 
 | Question | Decision | Why |
 | -------- | -------- | --- |
-| One store or many | A store per resource type, with a default store for the rest | `Patient` and `Encounter` can come from the existing database while `Questionnaire`, which it has no table for, is kept in a FHIR store. HAPI's "plain server" works the same way. |
+| One store or many | A store per resource type, with a default store for the rest. *Replaced the same day: the server takes one store, and `RoutingStore` sends types to stores of their own (see "One store" below).* | `Patient` and `Encounter` can come from the existing database while `Questionnaire`, which it has no table for, is kept in a FHIR store. HAPI's "plain server" works the same way. |
 | What a store supports | A store declares, per type, the interactions it has and the search parameters it answers. The server refuses the rest, and the `CapabilityStatement` says so | An existing database rarely keeps versions, and not every search parameter has a column. A facade that cannot answer `name:contains` must say so rather than answer wrongly. |
 | Versions | Three levels: every version kept, the current version only, none | A table with an update time or a row version can give `versionId` and check `If-Match`, without `vread` of old versions or `history`. A table with neither has no versions at all. |
 
@@ -31,21 +31,42 @@ nothing of the server: the copy is a FHIR store like any other. The two are ofte
 facade for what must be current and a copy for searching and reporting; a store per type is
 what makes that one server.
 
+## Decided (2026-11-22): one store
+
+Stores per type cost something in every feature built after them: a transaction only when all
+its types are in one store, chains only to the types of the same store, the
+`CapabilityStatement` worked out per store, and history of the server only with one store. Each
+new feature (composite parameters, subscriptions, bulk data) would need the same question
+answered again. HAPI pays this cost the same way: its JPA server keeps every type in one
+database, with every feature; its plain server takes providers per type, and transactions,
+chains and includes are the developer's to write. Most deployments copy data into one FHIR
+database instead.
+
+| Question | Decision | Why |
+| -------- | -------- | --- |
+| What the server takes | One `FhirStore`; `stores` is gone | The server asks one store what it can do and never asks whether two types are in the same store. A store serves many types. |
+| Data in other places | `RoutingStore` (in the package, optional): a store that sends each type to a store of its own, the rest to a default store | A facade over an existing database stays possible, as HAPI's plain providers next to its JPA ones. What crosses stores is decided in one place, by the one who needs it. |
+| Chains across stores | `StoreCapabilities.chains` may be a function of the target type; `RoutingStore` declares chains only to the types of the same store | A per-type boolean cannot say "to these types only"; a SQL store that joins some tables only needs the same. |
+| Transactions across stores | `RoutingStore` runs a transaction in its default store; types in other stores are read in it and not written (400) | Nothing can make two stores atomic together. Reads of a facade (a conditional reference to a patient in the existing database) are still useful. |
+| History of the server | Answered when the store has `history()` and every type declares history; `RoutingStore` merges its stores' histories, newest first | It gives the whole history where each store keeps one; a page costs the stores `offset + count` versions each. |
+
 ## Shape
 
 ```ts
 import { FhirContext } from '@fhirjs/core';
 import { r4Model } from '@fhirjs/r4';
-import { FhirServer, MemoryStore, nodeListener } from '@fhirjs/server';
+import { FhirServer, MemoryStore, nodeListener, RoutingStore } from '@fhirjs/server';
 import http from 'node:http';
 
 const server = new FhirServer({
   fhir: new FhirContext(r4Model),
-  store: new MemoryStore(),              // the default store
-  stores: {                              // stores of their own for some types
-    Patient: hbysPatients,               // a facade over the existing database
-    Encounter: hbysEncounters,
-  },
+  store: new RoutingStore({              // or one store for every type: new MemoryStore()
+    store: new MemoryStore(),            // the default store
+    routes: {                            // stores of their own for some types
+      Patient: hbysPatients,             // a facade over the existing database
+      Encounter: hbysEncounters,
+    },
+  }),
   resources: ['Patient', 'Encounter', 'Questionnaire'], // the types it serves; all when not given
   base: '/fhir',                         // the path it answers under
   interceptors: [],                      // (request, next) => Promise<Response>, as in the client
@@ -87,7 +108,7 @@ interface StoreCapabilities {
 }
 ```
 
-- **The server asks a type's store, or the default store.** An interaction the store does not
+- **The server asks its store** (a `RoutingStore` asks the type's store). An interaction the store does not
   declare answers 405. A search parameter it does not answer is treated as unknown: 400 with
   `Prefer: handling=strict`, left out of the `self` link otherwise, so the client sees which
   criteria were applied.
@@ -217,8 +238,8 @@ Where it differs from the proposal above, and why:
   another one (400), as the specification says.
 - **History pages** carry their place as `_offset` in the `next` and `previous` links, with
   `_count` (default 50, at most 500) and `_since`.
-- **History of the server** is answered when every type is in one store; with stores per type it
-  answers 405, and the `CapabilityStatement` leaves out `history-system`.
+- **History of the server** is answered when the store has `history()` and every type declares
+  history; otherwise it answers 405, and the `CapabilityStatement` leaves out `history-system`.
 - **`delete`** answers 204, also for a resource that is not there or is already deleted.
 - **An error the server did not expect** (a store's connection refused) answers 500 without its
   message, which goes to `onError`.
@@ -348,7 +369,7 @@ user; the rest is the proposal they lead to, open to change until it is built.
 | -------- | -------- | --- |
 | Which first | Batch first, transaction after it | A batch needs nothing new of the stores: each entry is an interaction the server already has. |
 | How a transaction is atomic | Through an optional store interface, `transaction()`: the store gives a view whose writes are kept when the work ends and undone when it fails | Only the store can make writes atomic (a database's `BEGIN` / `COMMIT` / `ROLLBACK`). The server cannot undo what a store has written. |
-| Across stores | A transaction is answered only when every entry's type is in one store that has `transaction()`; otherwise it is refused (400), and the `CapabilityStatement` does not list it | With a type in an existing database and another in memory, nothing can make the two atomic together; a transaction that is atomic in part would be worse than none. |
+| Across stores | A transaction is answered only when every entry's type is in one store that has `transaction()`; otherwise it is refused (400), and the `CapabilityStatement` does not list it. *Now a RoutingStore runs it in its default store; see "One store".* | With a type in an existing database and another in memory, nothing can make the two atomic together; a transaction that is atomic in part would be worse than none. |
 
 ### Batch
 
@@ -522,6 +543,23 @@ revincludes (each once), `:iterate`, includes refused when strict, and included 
 caller may not see with `maxIncludes`. Control runs: chains not authorized, `:iterate` not
 followed, every include iterated, no dedupe, included resources unchecked, `_has` not checking
 the reference, no limit on chains, tests fail each time. 311 tests before, 319 after.
+
+## Built: one store (2026-11-22)
+
+`FhirServerOptions.store` is required and `stores` is gone; `routing-store.ts` has
+`RoutingStore`. The server's checks for "the same store" (`_oneStore`, the store comparison in
+chains) are gone: a transaction needs the store's `transaction()`, a chain the source type's
+`chains`. `StoreCapabilities.chains` takes `true` or a function of the target type.
+`RoutingStore` gives each method to the type's store (405 when that store has none), declares
+chains to the types of the same store, runs a transaction in its default store with the other
+stores read only (400 on a write), and merges system history by `lastUpdated`.
+
+Tests: `packages/server/test/routing-store.spec.ts`, 4: routing with and without a default store,
+chains to the same store only, a transaction that reads another store and fails on a write to
+it (nothing kept in either), and merged history with paging; the tests that used `stores` use
+`RoutingStore` or one store. Control runs: chains not limited, other stores written in a
+transaction, history not sorted, system history without checking the types, the server ignoring
+the chain function; tests fail each time. 319 tests before, 323 after.
 
 ## Not in the first version
 

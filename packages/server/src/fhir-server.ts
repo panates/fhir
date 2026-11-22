@@ -42,10 +42,11 @@ export type FhirServerInterceptor = (
 export interface FhirServerOptions {
   /** The FHIR version's model (and profiles, packages) resources are checked with */
   fhir: FhirContext;
-  /** The store of the types that have none of their own in `stores` */
-  store?: FhirStore;
-  /** Stores of their own, by resource type: a facade over an existing database */
-  stores?: Record<string, FhirStore>;
+  /**
+   * Where the resources are kept. One store serves every type; a
+   * RoutingStore sends types to stores of their own.
+   */
+  store: FhirStore;
   /** The resource types served; every type a store declares when not given */
   resources?: readonly string[];
   /** The path the server answers under: '/fhir'. The root when not given */
@@ -122,7 +123,7 @@ const STATUS_LINE: Record<StoredVersion['method'], string> = {
 };
 
 /**
- * A FHIR server: answers the REST API of a FHIR version from stores, as a
+ * A FHIR server: answers the REST API of a FHIR version from a store, as a
  * fetch-style handler. It runs in any server that speaks Request and
  * Response, and in node:http through nodeListener().
  *
@@ -134,6 +135,7 @@ const STATUS_LINE: Record<StoredVersion['method'], string> = {
 export class FhirServer {
   readonly fhir: FhirContext;
   readonly base: string;
+  private readonly _main: FhirStore;
   private readonly _served = new Map<string, Served>();
   private readonly _handle: (request: Request) => Promise<Response>;
   private readonly _date = new Date().toISOString();
@@ -145,6 +147,7 @@ export class FhirServer {
     this.base = (options.base ?? '').replace(/\/+$/, '');
     if (this.base && !this.base.startsWith('/'))
       throw new TypeError(`base must be a path: "${options.base}"`);
+    this._main = options.store;
     const model = this.fhir.model;
     const types = options.resources ?? model.resourceTypes();
     for (const type of types) {
@@ -152,22 +155,17 @@ export class FhirServer {
         throw new TypeError(
           `${type} is not a resource type of FHIR ${model.fhirVersion}`,
         );
-      const store = options.stores?.[type] ?? options.store;
-      const caps = store?.capabilities(type);
-      if (caps && store)
+      const store = options.store;
+      const caps = store.capabilities(type);
+      if (caps)
         this._served.set(type, {
           store,
           caps,
           params: searchParams(model, type, caps),
         });
       else if (options.resources)
-        throw new TypeError(`No store serves ${type}`);
+        throw new TypeError(`The store does not serve ${type}`);
     }
-    for (const type of Object.keys(options.stores ?? {}))
-      if (!this._served.has(type))
-        throw new TypeError(
-          `The store of ${type} does not serve it, or ${type} is not in resources`,
-        );
     this._handle = (options.interceptors ?? []).reduceRight<
       (r: Request) => Promise<Response>
     >(
@@ -455,11 +453,11 @@ export class FhirServer {
         );
       return type;
     });
-    const store = this._oneStore(types);
-    if (!store?.transaction)
+    const store = this._main;
+    if (!store.transaction)
       throw new FhirServerError(
         400,
-        `Transactions are not supported for ${[...new Set(types)].join(', ')}: they are not in one store that has transactions`,
+        'Transactions are not supported: the store has no transaction()',
         'not-supported',
       );
     const methodOf = (i: number) => entries[i].request.method.toUpperCase();
@@ -473,7 +471,7 @@ export class FhirServer {
       (a, b) => (RANK[methodOf(a)] ?? 3) - (RANK[methodOf(b)] ?? 3),
     );
     return store.transaction(async view => {
-      const tx: Exchange = { ...ctx, tx: { store, view } };
+      const tx: Exchange = { ...ctx, tx: view };
       const out: Record<string, any>[] = [];
       const run = async (i: number, assignedId?: string) => {
         const response = await this._entry(tx, entries[i], i, assignedId);
@@ -1603,13 +1601,13 @@ export class FhirServer {
     depth: number,
   ): string | undefined {
     if (depth >= MAX_CHAIN) return `a chain has ${MAX_CHAIN} links at most`;
-    const source = this._served.get(from)!;
-    if (!source.caps.chains)
+    const chains = this._served.get(from)!.caps.chains;
+    if (!chains)
       return `the store of ${from} does not answer chained parameters`;
     const target = this._served.get(to);
     if (!target) return `${to} is not served`;
-    if (target.store !== source.store)
-      return `${to} is not in the store of ${from}`;
+    if (chains !== true && !chains(to))
+      return `the store of ${from} does not answer chains to ${to}`;
     if (!target.caps.interactions.includes('search'))
       return `${to} cannot be searched`;
   }
@@ -1798,26 +1796,19 @@ export class FhirServer {
       );
   }
 
-  /** The store of system history: the one store of every type served */
+  /**
+   * The store as system history sees it: with history when every type
+   * served declares history
+   */
   private _systemStore(): Served {
-    const first = this._served.values().next().value;
-    if (!first || !this._oneStore(this.resourceTypes))
-      throw new FhirServerError(
-        405,
-        'History of the whole server is not supported: its types are in different stores',
-        'not-supported',
-      );
-    return first;
-  }
-
-  /** The one store of some types; undefined when they are in more than one */
-  private _oneStore(types: Iterable<string>): FhirStore | undefined {
-    const stores = new Set<FhirStore>();
-    for (const type of types) {
-      const served = this._served.get(type);
-      if (served) stores.add(served.store);
-    }
-    return stores.size === 1 ? stores.values().next().value : undefined;
+    const all = [...this._served.values()];
+    const history =
+      all.length > 0 && all.every(s => s.caps.interactions.includes('history'));
+    return {
+      store: this._main,
+      caps: { interactions: history ? ['history'] : [], versions: 'all' },
+      params: new Map(),
+    };
   }
 
   /** A type as an exchange sees it: in a transaction, through its view of the store */
@@ -1827,9 +1818,7 @@ export class FhirServer {
   }
 
   private _inTx(ctx: Exchange, served: Served): Served {
-    return ctx.tx && served.store === ctx.tx.store
-      ? { ...served, store: ctx.tx.view }
-      : served;
+    return ctx.tx ? { ...served, store: ctx.tx } : served;
   }
 
   /* ---------------------------------------------------------------- */
@@ -1995,14 +1984,12 @@ export class FhirServer {
     }
     rest.resource = resource;
     rest.interaction = [{ code: 'batch' }];
-    if (this._oneStore(this.resourceTypes)?.transaction)
-      rest.interaction.push({ code: 'transaction' });
-    try {
-      if (this._systemStore().caps.interactions.includes('history'))
-        rest.interaction.push({ code: 'history-system' });
-    } catch {
-      /* types in different stores: no system history */
-    }
+    if (this._main.transaction) rest.interaction.push({ code: 'transaction' });
+    if (
+      this._systemStore().caps.interactions.includes('history') &&
+      typeof this._main.history === 'function'
+    )
+      rest.interaction.push({ code: 'history-system' });
     return {
       resourceType: 'CapabilityStatement',
       status: 'active',
@@ -2041,8 +2028,8 @@ interface Exchange {
   baseUrl: string;
   /** What stores are told: the request, and its caller once authenticated */
   context: FhirRequestContext;
-  /** In a transaction: its store, and the view of it the entries go through */
-  tx?: { store: FhirStore; view: FhirStore };
+  /** In a transaction: the view of the store the entries go through */
+  tx?: FhirStore;
   /** The id a transaction gave the resource an entry creates */
   assignedId?: string;
 }
