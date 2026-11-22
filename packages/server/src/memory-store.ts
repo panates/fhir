@@ -33,12 +33,16 @@ const CAPABILITIES: StoreCapabilities = {
   ],
   versions: 'all',
   updateCreate: true,
+  acceptsIds: true,
 };
 
 /**
  * A store in memory, for tests and small servers: every resource type, every
  * version kept. Resources are kept as JSON text, so a decimal keeps the
  * places it was written with.
+ *
+ * A transaction holds the store: other requests wait until it ends, and its
+ * writes are undone when it fails.
  */
 export class MemoryStore implements FhirStore {
   /** Every version written, oldest first */
@@ -46,14 +50,28 @@ export class MemoryStore implements FhirStore {
   /** The versions of each resource, oldest first, by 'type/id' */
   private readonly _byKey = new Map<string, Version[]>();
   private _lastTime = 0;
+  /** Settles when the transaction running, or the last one waiting, ends */
+  private _turn: Promise<void> = Promise.resolve();
+  /** The store as a transaction sees it: the same methods, without waiting */
+  private readonly _view: FhirStore = {
+    capabilities: () => CAPABILITIES,
+    read: async (type, id) => this._read(type, id),
+    vread: async (type, id, versionId) => this._vread(type, id, versionId),
+    create: async (type, resource) => this._create(type, resource),
+    update: async (type, id, resource, ifMatch) =>
+      this._update(type, id, resource, ifMatch),
+    delete: async (type, id, ifMatch) => this._delete(type, id, ifMatch),
+    history: async (type, id, query) => this._history(type, id, query),
+    search: async (type, query) => this._search(type, query),
+  };
 
   capabilities(): StoreCapabilities {
     return CAPABILITIES;
   }
 
   async read(type: string, id: string): Promise<StoredResource | undefined> {
-    const v = this._versions(type, id)?.at(-1);
-    return v && stored(v);
+    await this._turn;
+    return this._read(type, id);
   }
 
   async vread(
@@ -61,15 +79,16 @@ export class MemoryStore implements FhirStore {
     id: string,
     versionId: string,
   ): Promise<StoredResource | undefined> {
-    const v = this._versions(type, id)?.find(x => x.versionId === versionId);
-    return v && stored(v);
+    await this._turn;
+    return this._vread(type, id, versionId);
   }
 
   async create(
     type: string,
     resource: Record<string, any>,
   ): Promise<StoredVersion> {
-    return this._write(type, randomUUID(), resource, 'POST');
+    await this._turn;
+    return this._create(type, resource);
   }
 
   async update(
@@ -78,6 +97,85 @@ export class MemoryStore implements FhirStore {
     resource: Record<string, any>,
     ifMatch?: string,
   ): Promise<StoredVersion | undefined> {
+    await this._turn;
+    return this._update(type, id, resource, ifMatch);
+  }
+
+  async delete(
+    type: string,
+    id: string,
+    ifMatch?: string,
+  ): Promise<StoredVersion | undefined> {
+    await this._turn;
+    return this._delete(type, id, ifMatch);
+  }
+
+  async history(
+    type: string | undefined,
+    id: string | undefined,
+    query: HistoryQuery,
+  ): Promise<StorePage<StoredVersion>> {
+    await this._turn;
+    return this._history(type, id, query);
+  }
+
+  async search(
+    type: string,
+    query: SearchQuery,
+  ): Promise<StorePage<StoredResource>> {
+    await this._turn;
+    return this._search(type, query);
+  }
+
+  async transaction<T>(work: (tx: FhirStore) => Promise<T>): Promise<T> {
+    const before = this._turn;
+    let end!: () => void;
+    this._turn = new Promise<void>(resolve => (end = resolve));
+    await before;
+    const mark = this._log.length;
+    try {
+      return await work(this._view);
+    } catch (e) {
+      this._undo(mark);
+      throw e;
+    } finally {
+      end();
+    }
+  }
+
+  /* The methods themselves: synchronous, so that nothing comes between */
+
+  private _read(type: string, id: string): StoredResource | undefined {
+    const v = this._versions(type, id)?.at(-1);
+    return v && stored(v);
+  }
+
+  private _vread(
+    type: string,
+    id: string,
+    versionId: string,
+  ): StoredResource | undefined {
+    const v = this._versions(type, id)?.find(x => x.versionId === versionId);
+    return v && stored(v);
+  }
+
+  private _create(type: string, resource: Record<string, any>): StoredVersion {
+    const id = resource.id ?? randomUUID();
+    if (this._versions(type, id)?.at(-1)?.text !== undefined)
+      throw new FhirServerError(
+        409,
+        `${type}/${id} exists already`,
+        'duplicate',
+      );
+    return this._write(type, id, resource, 'POST');
+  }
+
+  private _update(
+    type: string,
+    id: string,
+    resource: Record<string, any>,
+    ifMatch?: string,
+  ): StoredVersion {
     const current = this._versions(type, id)?.at(-1);
     checkMatch(type, id, current, ifMatch);
     // an id never used, or a deleted one: created anew
@@ -89,22 +187,22 @@ export class MemoryStore implements FhirStore {
     );
   }
 
-  async delete(
+  private _delete(
     type: string,
     id: string,
     ifMatch?: string,
-  ): Promise<StoredVersion | undefined> {
+  ): StoredVersion | undefined {
     const current = this._versions(type, id)?.at(-1);
     if (!current || current.text === undefined) return;
     checkMatch(type, id, current, ifMatch);
     return this._write(type, id, undefined, 'DELETE');
   }
 
-  async history(
+  private _history(
     type: string | undefined,
     id: string | undefined,
     query: HistoryQuery,
-  ): Promise<StorePage<StoredVersion>> {
+  ): StorePage<StoredVersion> {
     let list =
       type && id
         ? (this._versions(type, id) ?? [])
@@ -124,10 +222,7 @@ export class MemoryStore implements FhirStore {
     };
   }
 
-  async search(
-    type: string,
-    query: SearchQuery,
-  ): Promise<StorePage<StoredResource>> {
+  private _search(type: string, query: SearchQuery): StorePage<StoredResource> {
     const matches: StoredResource[] = [];
     for (const versions of this._byKey.values()) {
       const v = versions.at(-1)!;
@@ -145,6 +240,16 @@ export class MemoryStore implements FhirStore {
 
   private _versions(type: string, id: string): Version[] | undefined {
     return this._byKey.get(`${type}/${id}`);
+  }
+
+  /** Takes back the versions written since the log had `mark` of them */
+  private _undo(mark: number) {
+    for (const v of this._log.splice(mark).reverse()) {
+      const key = `${v.type}/${v.id}`;
+      const versions = this._byKey.get(key)!;
+      versions.pop();
+      if (!versions.length) this._byKey.delete(key);
+    }
   }
 
   private _write(

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   type FhirContext,
   type FhirSearchParameter,
@@ -5,7 +6,7 @@ import {
   parseFhirJson,
   rawDecimal,
 } from '@fhirjs/core';
-import { FhirServerError } from './fhir-server-error.js';
+import { type FhirOutcomeIssue, FhirServerError } from './fhir-server-error.js';
 import type {
   FhirStore,
   FhirStoreInteraction,
@@ -54,7 +55,7 @@ export interface FhirServerOptions {
   defaultCount?: number;
   /** The most entries a page has, whatever _count asks (default 500) */
   maxCount?: number;
-  /** The most entries a batch Bundle may have (default 100) */
+  /** The most entries a batch or transaction Bundle may have (default 100) */
   maxBundleEntries?: number;
   /** The software name in the CapabilityStatement */
   name?: string;
@@ -264,7 +265,12 @@ export class FhirServer {
     const method = ctx.method;
     if (seg[0] === '_history' && seg.length === 1) {
       if (method !== 'GET') throw notAllowed(method, '_history');
-      return this._history(ctx, this._systemStore(), undefined, undefined);
+      return this._history(
+        ctx,
+        this._inTx(ctx, this._systemStore()),
+        undefined,
+        undefined,
+      );
     }
     if (
       seg.length === 2 &&
@@ -282,7 +288,7 @@ export class FhirServer {
       );
 
     const type = seg[0];
-    const served = this._served.get(type);
+    const served = this._servedOf(ctx, type);
     if (!served)
       throw new FhirServerError(
         404,
@@ -351,13 +357,15 @@ export class FhirServer {
   }
 
   /* ---------------------------------------------------------------- */
-  /* Batch                                                            */
+  /* Batch and transaction                                            */
   /* ---------------------------------------------------------------- */
 
   /**
-   * POST [base] with a batch Bundle: each entry an interaction of its own,
-   * authorized as such, in the order given; one that fails does not stop
-   * the others. The answer is a batch-response Bundle, an entry per entry.
+   * POST [base] with a batch or transaction Bundle. A batch: each entry an
+   * interaction of its own, authorized as such, in the order given; one that
+   * fails does not stop the others. A transaction: all or nothing (see
+   * _transaction). The answer is a batch-response or transaction-response
+   * Bundle, an entry per entry in the order of the request.
    */
   private async _bundle(ctx: Exchange): Promise<Response> {
     const mediaType = mediaTypeOf(ctx.request.headers.get('Content-Type'));
@@ -375,16 +383,11 @@ export class FhirServer {
     }
     if (bundle?.resourceType !== 'Bundle')
       throw new FhirServerError(400, 'POST [base] takes a Bundle', 'invalid');
-    if (bundle.type === 'transaction')
+    const kind = bundle.type;
+    if (kind !== 'batch' && kind !== 'transaction')
       throw new FhirServerError(
         400,
-        'Transactions are not supported yet; send a batch',
-        'not-supported',
-      );
-    if (bundle.type !== 'batch')
-      throw new FhirServerError(
-        400,
-        `POST [base] takes a batch Bundle, not a ${bundle.type ?? 'Bundle without type'}`,
+        `POST [base] takes a batch or transaction Bundle, not a ${kind ?? 'Bundle without type'}`,
         'invalid',
       );
     const entries: any[] = Array.isArray(bundle.entry) ? bundle.entry : [];
@@ -395,27 +398,203 @@ export class FhirServer {
         `The Bundle has ${entries.length} entries; this server takes ${max} at most`,
         'too-costly',
       );
-    const out: Record<string, any>[] = [];
-    for (const [i, entry] of entries.entries())
-      out.push(await this._entry(ctx, entry, i));
+    let out: Record<string, any>[];
+    if (kind === 'transaction') out = await this._transaction(ctx, entries);
+    else {
+      out = [];
+      for (const [i, entry] of entries.entries())
+        out.push(await entryOf(await this._entry(ctx, entry, i)));
+    }
     // the entries' resources keep the places of their decimals
     return jsonResponse(
       200,
       stringifyJson({
         resourceType: 'Bundle',
-        type: 'batch-response',
+        type: `${kind}-response`,
         ...(out.length ? { entry: out } : {}),
       }),
     );
   }
 
-  /** One entry of a batch, run as a request; its response entry */
+  /**
+   * The entries of a transaction, all or nothing, in the store's
+   * transaction: deletes, then creates, then updates and patches, then reads
+   * and searches. New resources with a placeholder fullUrl (urn:uuid:) get
+   * their ids first, and the references to them are rewritten; conditional
+   * references are resolved by a search. An entry that fails ends it: its
+   * status and outcome are the answer, and nothing is written.
+   */
+  private async _transaction(
+    ctx: Exchange,
+    entries: any[],
+  ): Promise<Record<string, any>[]> {
+    if (!entries.length) return [];
+    const types = entries.map((entry, i) => {
+      entryMethod(entry, i);
+      const type = entry.request.url
+        .replace(/^\/+/, '')
+        .split(/[/?]/)[0] as string;
+      if (!type)
+        throw new FhirServerError(
+          400,
+          `Entry ${i}: a transaction cannot hold a request on the server base`,
+          'not-supported',
+        );
+      if (!this._served.has(type))
+        throw new FhirServerError(
+          404,
+          `Entry ${i}: resource type ${type} is not served`,
+          'not-supported',
+        );
+      return type;
+    });
+    const store = this._oneStore(types);
+    if (!store?.transaction)
+      throw new FhirServerError(
+        400,
+        `Transactions are not supported for ${[...new Set(types)].join(', ')}: they are not in one store that has transactions`,
+        'not-supported',
+      );
+    const methodOf = (i: number) => entries[i].request.method.toUpperCase();
+    const RANK: Record<string, number> = {
+      DELETE: 0,
+      POST: 1,
+      PUT: 2,
+      PATCH: 2,
+    };
+    const order = [...entries.keys()].sort(
+      (a, b) => (RANK[methodOf(a)] ?? 3) - (RANK[methodOf(b)] ?? 3),
+    );
+    return store.transaction(async view => {
+      const tx: Exchange = { ...ctx, tx: { store, view } };
+      const out: Record<string, any>[] = [];
+      const run = async (i: number, assignedId?: string) => {
+        const response = await this._entry(tx, entries[i], i, assignedId);
+        if (response.status >= 400) throw await entryFailure(response, i);
+        out[i] = await entryOf(response);
+      };
+      const deletes = order.filter(i => methodOf(i) === 'DELETE');
+      for (const i of deletes) await run(i);
+      const assigned = await this._placeholders(tx, entries, types);
+      const rest = order.filter(i => methodOf(i) !== 'DELETE');
+      for (const i of rest) await run(i, assigned.get(i));
+      return out;
+    }, ctx.context);
+  }
+
+  /**
+   * Gives the new resources of a transaction their ids and rewrites the
+   * references: to a placeholder fullUrl (urn:uuid:), to the resource's
+   * Type/id; a conditional one (Patient?identifier=...), to the one resource
+   * its criteria find (412 for none or more). A conditional create that
+   * finds its resource is referred to as that one. The ids given, by entry.
+   */
+  private async _placeholders(
+    tx: Exchange,
+    entries: any[],
+    types: string[],
+  ): Promise<Map<number, string>> {
+    const assigned = new Map<number, string>();
+    const targets = new Map<string, string>();
+    for (const [i, entry] of entries.entries()) {
+      const fullUrl = entry.fullUrl;
+      if (typeof fullUrl !== 'string' || !/^urn:(uuid|oid):/.test(fullUrl))
+        continue;
+      const type = types[i];
+      const method = entry.request.method.toUpperCase();
+      const path = entry.request.url.replace(/^\/+/, '');
+      if (method === 'PUT' && !path.includes('?')) {
+        targets.set(fullUrl, path);
+        continue;
+      }
+      if (method !== 'POST') continue;
+      const served = this._servedOf(tx, type)!;
+      const ifNoneExist = entry.request.ifNoneExist;
+      if (typeof ifNoneExist === 'string') {
+        const found = await this._matchesOf(
+          tx,
+          ifNoneExist.replace(/^\?/, ''),
+          type,
+          served,
+          `Entry ${i}: conditional create`,
+          'create',
+        );
+        if (found.length > 1)
+          throw new FhirServerError(
+            412,
+            `Entry ${i}: If-None-Exist: ${ifNoneExist} finds more than one ${type}`,
+            'multiple-matches',
+          );
+        if (found.length) {
+          targets.set(fullUrl, `${type}/${found[0].id}`);
+          continue;
+        }
+      }
+      if (!served.caps.acceptsIds)
+        throw new FhirServerError(
+          400,
+          `Entry ${i}: the store of ${type} gives ids itself, so a transaction cannot refer to a new ${type} by its fullUrl`,
+          'not-supported',
+        );
+      const id = randomUUID();
+      assigned.set(i, id);
+      targets.set(fullUrl, `${type}/${id}`);
+    }
+    // the references of every resource, once each criteria
+    const resolved = new Map<string, string>();
+    const resolve = async (reference: string, i: number) => {
+      const type = reference.slice(0, reference.indexOf('?'));
+      const served = this._servedOf(tx, type);
+      if (!served)
+        throw new FhirServerError(
+          400,
+          `Entry ${i}: ${reference}: resource type ${type} is not served`,
+          'not-supported',
+        );
+      await this._authorize(tx, 'search', type);
+      const found = await this._matchesOf(
+        tx,
+        reference.slice(type.length + 1),
+        type,
+        served,
+        `Entry ${i}: conditional reference`,
+        'search',
+      );
+      if (found.length !== 1)
+        throw new FhirServerError(
+          412,
+          `Entry ${i}: the conditional reference ${reference} finds ${found.length ? 'more than one' : 'no'} ${type}`,
+          found.length ? 'multiple-matches' : 'not-found',
+        );
+      return `${type}/${found[0].id}`;
+    };
+    for (const [i, entry] of entries.entries()) {
+      if (!entry.resource || entry.resource.resourceType === 'Binary') continue;
+      for (const holder of referencesOf(entry.resource)) {
+        const reference: string = holder.reference;
+        const target = targets.get(reference);
+        if (target) holder.reference = target;
+        else if (/^[A-Z][A-Za-z]*\?/.test(reference)) {
+          let r = resolved.get(reference);
+          if (!r) resolved.set(reference, (r = await resolve(reference, i)));
+          holder.reference = r;
+        }
+      }
+    }
+    return assigned;
+  }
+
+  /**
+   * One entry of a batch or transaction, run as a request, its answer an
+   * OperationOutcome when it fails. `assignedId`: the id a transaction gave
+   * a new resource.
+   */
   private async _entry(
     ctx: Exchange,
     entry: any,
     index: number,
-  ): Promise<Record<string, any>> {
-    let response: Response;
+    assignedId?: string,
+  ): Promise<Response> {
     try {
       const request = this._entryRequest(ctx, entry, index);
       const url = new URL(request.url);
@@ -430,7 +609,7 @@ export class FhirServer {
           `Entry ${index}: a batch cannot hold a request on the server base`,
           'not-supported',
         );
-      response = await this._dispatch(
+      return await this._dispatch(
         {
           request,
           url,
@@ -438,6 +617,8 @@ export class FhirServer {
           baseUrl: ctx.baseUrl,
           // the caller of the Bundle, the request of the entry
           context: { principal: ctx.context.principal, request },
+          tx: ctx.tx,
+          assignedId,
         },
         seg,
         path,
@@ -451,31 +632,14 @@ export class FhirServer {
           'exception',
         );
       }
-      response = outcomeResponse(e as FhirServerError);
+      return outcomeResponse(e as FhirServerError);
     }
-    return entryOf(response);
   }
 
   /** The request an entry stands for: its method, URL, conditions and resource */
   private _entryRequest(ctx: Exchange, entry: any, index: number): Request {
-    const r = entry?.request;
-    const method = typeof r?.method === 'string' ? r.method.toUpperCase() : '';
-    if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method))
-      throw new FhirServerError(
-        400,
-        `Entry ${index}: request.method "${r?.method}" is not one`,
-        'required',
-      );
-    if (
-      typeof r.url !== 'string' ||
-      !r.url ||
-      /^[a-z][a-z0-9+.-]*:/i.test(r.url)
-    )
-      throw new FhirServerError(
-        400,
-        `Entry ${index}: request.url must be relative to the server base`,
-        'required',
-      );
+    const method = entryMethod(entry, index);
+    const r = entry.request;
     const headers = new Headers({ Accept: FHIR_JSON });
     const prefer = ctx.request.headers.get('Prefer');
     if (prefer) headers.set('Prefer', prefer);
@@ -588,7 +752,11 @@ export class FhirServer {
       if (found.length === 1)
         return this._written(ctx, { ...found[0], method: 'PUT' }, 200, served);
     }
-    const s = await store.create!(type, resource, ctx.context);
+    const s = await store.create!(
+      type,
+      ctx.assignedId ? { ...resource, id: ctx.assignedId } : resource,
+      ctx.context,
+    );
     return this._written(ctx, s, 201, served);
   }
 
@@ -1274,15 +1442,36 @@ export class FhirServer {
 
   /** The store of system history: the one store of every type served */
   private _systemStore(): Served {
-    const stores = new Set([...this._served.values()].map(s => s.store));
     const first = this._served.values().next().value;
-    if (stores.size !== 1 || !first)
+    if (!first || !this._oneStore(this.resourceTypes))
       throw new FhirServerError(
         405,
         'History of the whole server is not supported: its types are in different stores',
         'not-supported',
       );
     return first;
+  }
+
+  /** The one store of some types; undefined when they are in more than one */
+  private _oneStore(types: Iterable<string>): FhirStore | undefined {
+    const stores = new Set<FhirStore>();
+    for (const type of types) {
+      const served = this._served.get(type);
+      if (served) stores.add(served.store);
+    }
+    return stores.size === 1 ? stores.values().next().value : undefined;
+  }
+
+  /** A type as an exchange sees it: in a transaction, through its view of the store */
+  private _servedOf(ctx: Exchange, type: string): Served | undefined {
+    const served = this._served.get(type);
+    return served && this._inTx(ctx, served);
+  }
+
+  private _inTx(ctx: Exchange, served: Served): Served {
+    return ctx.tx && served.store === ctx.tx.store
+      ? { ...served, store: ctx.tx.view }
+      : served;
   }
 
   /* ---------------------------------------------------------------- */
@@ -1448,6 +1637,8 @@ export class FhirServer {
     }
     rest.resource = resource;
     rest.interaction = [{ code: 'batch' }];
+    if (this._oneStore(this.resourceTypes)?.transaction)
+      rest.interaction.push({ code: 'transaction' });
     try {
       if (this._systemStore().caps.interactions.includes('history'))
         rest.interaction.push({ code: 'history-system' });
@@ -1480,6 +1671,69 @@ interface Exchange {
   baseUrl: string;
   /** What stores are told: the request, and its caller once authenticated */
   context: FhirRequestContext;
+  /** In a transaction: its store, and the view of it the entries go through */
+  tx?: { store: FhirStore; view: FhirStore };
+  /** The id a transaction gave the resource an entry creates */
+  assignedId?: string;
+}
+
+/** The method of a batch or transaction entry, its URL checked (400 otherwise) */
+function entryMethod(entry: any, index: number): string {
+  const r = entry?.request;
+  const method = typeof r?.method === 'string' ? r.method.toUpperCase() : '';
+  if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method))
+    throw new FhirServerError(
+      400,
+      `Entry ${index}: request.method "${r?.method}" is not one`,
+      'required',
+    );
+  if (typeof r.url !== 'string' || !r.url || /^[a-z][a-z0-9+.-]*:/i.test(r.url))
+    throw new FhirServerError(
+      400,
+      `Entry ${index}: request.url must be relative to the server base`,
+      'required',
+    );
+  return method;
+}
+
+/** The objects of a resource that hold a reference: { reference: '...' } */
+function referencesOf(value: unknown, out: Record<string, any>[] = []) {
+  if (Array.isArray(value)) for (const v of value) referencesOf(v, out);
+  else if (value && typeof value === 'object') {
+    const o = value as Record<string, any>;
+    if (typeof o.reference === 'string') out.push(o);
+    for (const v of Object.values(o)) referencesOf(v, out);
+  }
+  return out;
+}
+
+/** The error a failed transaction entry ends the transaction with, naming the entry */
+async function entryFailure(
+  response: Response,
+  index: number,
+): Promise<FhirServerError> {
+  const text = await response.text();
+  let issues: FhirOutcomeIssue[] = [];
+  try {
+    issues = parseFhirJson(text)?.issue ?? [];
+  } catch {
+    /* not an OperationOutcome */
+  }
+  const named = issues.map(i => ({
+    ...i,
+    diagnostics: i.diagnostics?.startsWith('Entry ')
+      ? i.diagnostics
+      : `Entry ${index}: ${i.diagnostics ?? response.statusText}`,
+  }));
+  const e = new FhirServerError(
+    response.status,
+    named[0]?.diagnostics ?? `Entry ${index} failed`,
+    'processing',
+    named,
+  );
+  const challenge = response.headers.get('WWW-Authenticate');
+  if (challenge) e.headers = { 'WWW-Authenticate': challenge };
+  return e;
 }
 
 /**
@@ -1648,7 +1902,7 @@ const STATUS_TEXT: Record<number, string> = {
   500: 'Internal Server Error',
 };
 
-/** The response entry of a batch: status, headers, and the resource or the outcome */
+/** The response entry of a batch or transaction: status, headers, and the resource or the outcome */
 async function entryOf(response: Response): Promise<Record<string, any>> {
   const r: Record<string, any> = {
     status: `${response.status} ${STATUS_TEXT[response.status] ?? ''}`.trim(),

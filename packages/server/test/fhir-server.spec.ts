@@ -369,6 +369,7 @@ describe('FhirServer over a MemoryStore', () => {
     ]);
     expect(cs.rest[0].interaction).toEqual([
       { code: 'batch' },
+      { code: 'transaction' },
       { code: 'history-system' },
     ]);
     expect(cs.rest[0].resource).toHaveLength(r4Model.resourceTypes().length);
