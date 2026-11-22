@@ -39,11 +39,10 @@ It answers `metadata`, `read`, `vread`, `create`, `update` (and update as create
 and `history` of an instance, a type and the server, with `ETag`, `If-Match`, `Location` and
 `Prefer: return=`. A resource that is not valid is refused with 422 and its issues.
 
-Search (`GET [type]?...`, `POST [type]/_search`) takes the token, string, date and reference
-parameters of the version, with their modifiers and prefixes, and pages its results. A store
-gets the criteria parsed and typed, to translate to its own query language; the memory store
-matches them by the parameters' FHIRPath expressions. Number, quantity and uri parameters and
-`_sort` come next.
+Search (`GET [type]?...`, `POST [type]/_search`) takes the token, string, date, reference,
+number, quantity and uri parameters of the version, with their modifiers and prefixes, sorts
+with `_sort` and pages its results. A store gets the criteria parsed and typed, to translate to
+its own query language; the memory store matches them by the parameters' FHIRPath expressions.
 
 ### A store of your own
 
