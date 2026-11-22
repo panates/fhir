@@ -11,7 +11,7 @@ import { r4bModel } from '../src/index.js';
 const R4B_EXAMPLES = packagePath('hl7.fhir.r4b.examples#4.3.0');
 
 describe('R4B validate()', () => {
-  it('runs the R4B invariants on every example, and finds the invalid ones', function () {
+  it('runs the R4B invariants on every example, and finds the invalid ones #slow', function () {
     if (!hasPackage(R4B_EXAMPLES)) return this.skip();
     this.timeout(120000);
     const fhir = new FhirContext(r4bModel);

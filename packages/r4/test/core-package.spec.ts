@@ -55,7 +55,7 @@ describe('The R4 core package as data', function () {
     );
   });
 
-  it('decodes every valid example against the core profiles and extensions it uses', function () {
+  it('decodes every valid example against the core profiles and extensions it uses #slow', function () {
     if (!hasPackage(R4_EXAMPLES)) return this.skip();
     let ok = 0;
     let checked = 0;

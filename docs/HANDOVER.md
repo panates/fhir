@@ -12,10 +12,11 @@ say: how to work in the repository, what is open, and what to watch for.
   standards) are merged into `dev`. `dev` did not exist before this work and was made from
   `main`.
 - 219 tests pass (`pnpm test`); type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
-- CI: `.github/workflows/test.yml` runs on every push but to `main`. It builds, checks the types
-  of the tests, fetches the HL7 packages (cached, keyed by the hash of
-  `support/fetch-packages.mts`), checks that `pnpm generate` leaves the committed sources
-  unchanged, and runs `pnpm citest`.
+- CI: `.github/workflows/test.yml` runs on pull requests into `dev` and on pushes to `dev`. It
+  builds, checks the types of the tests, fetches the HL7 packages (cached, keyed by the hash of
+  `support/fetch-packages.mts`; a pull request restores the cache `dev`'s runs save), checks that
+  `pnpm generate` leaves the committed sources unchanged, and runs the tests with coverage. The
+  ten tests tagged `#slow` run in a second job in parallel, without coverage.
 - Every package is `"private": true` at version `0.0.0`; nothing is published yet. The npm scope
   `@fhirjs` belongs to the user.
 

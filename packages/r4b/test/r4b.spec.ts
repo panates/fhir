@@ -85,7 +85,7 @@ describe('R4B', () => {
       if (!hasPackage(R4B_EXAMPLES)) this.skip();
     });
 
-    it('decodes and encodes every example back to its source', () => {
+    it('decodes and encodes every example back to its source #slow', () => {
       const { ok, failed, differ } = roundTripExamples(fhir, R4B_EXAMPLES);
       expect(differ).toEqual([]);
       // Invalid in the package itself: a required status or SearchParameter.base
@@ -113,7 +113,7 @@ describe('R4B', () => {
       expect(ok).toBe(2826);
     });
 
-    it('keeps the precision of decimals through decode(text) and stringify()', () => {
+    it('keeps the precision of decimals through decode(text) and stringify() #slow', () => {
       const { lost } = decimalPrecision(fhir, R4B_EXAMPLES);
       expect(lost).toEqual([]);
     });

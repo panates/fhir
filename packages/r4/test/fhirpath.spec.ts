@@ -73,7 +73,7 @@ describe('FHIRPath over the R4 model', () => {
    * Every R4 invariant on every node of every valid R4 example, against
    * fhirpath.js (HL7's JavaScript FHIRPath, a development dependency only)
    */
-  it('gives what fhirpath.js gives on every R4 invariant of the R4 examples', function () {
+  it('gives what fhirpath.js gives on every R4 invariant of the R4 examples #slow', function () {
     if (!hasPackage(R4_EXAMPLES)) return this.skip();
     this.timeout(180000);
     const require = createRequire(import.meta.url);

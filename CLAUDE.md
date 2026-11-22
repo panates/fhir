@@ -33,12 +33,17 @@ pnpm generate         # rewrites packages/{r4,r4b,r5}/src from the HL7 packages
 
 Check the types of the tests with `pnpm exec tsc -p tsconfig-test.json --noEmit`. CI
 (`.github/workflows/test.yml`) runs all of the above and fails when `pnpm generate` changes the
-committed sources.
+committed sources. It runs on pull requests into `dev` and on pushes to `dev`, not on a push to
+a feature branch: open a pull request to get a run.
 
 ## Rules and traps
 
 - **Run `pnpm fetch-packages` before you measure.** Without it the tests that need the HL7
   packages are skipped, and the test count is not the real one (219 with them).
+- **Tag a slow test `#slow`** at the end of its title: one that runs over every example of a
+  version or takes about a second or more. CI runs the tagged tests in a second job, in parallel
+  and without coverage (`mocha --grep '#slow'`), and the others with `--invert`. Ten are tagged;
+  they take 50 of the 53 seconds of `pnpm test`.
 - **Never edit `packages/{r4,r4b,r5}/src` by hand.** Change `support/build-models.mts`, run
   `pnpm generate` and commit what it writes. A generator change for one version must leave the
   others unchanged: count `@FhirElement` in each (R4 5,534, R4B 5,652, R5 7,097) and the search parameters in

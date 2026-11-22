@@ -3,21 +3,29 @@ on:
   # Can be run manually
   workflow_dispatch:
 
-  # Every push but to main, which only takes pull requests from dev
+  # dev, after a merge: its run saves the cache of the FHIR packages for pull requests
   push:
-    branches-ignore:
-      - main
+    branches:
+      - dev
+
+  # Pull requests into dev. A pull request's run can restore the caches of its base branch,
+  # which a push to a feature branch cannot: GitHub scopes caches to a branch, its base and the
+  # default branch (main, which has no runs of this workflow).
+  pull_request:
+    branches:
+      - dev
 
 # This workflow only reads the repository
 permissions:
   contents: read
 
-# Only one run per branch at a time
+# Only one run per branch or pull request at a time
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Everything but the tests tagged #slow, with coverage
   test:
     # A push whose commit message says no-test skips the tests
     if: >
@@ -65,4 +73,34 @@ jobs:
           fi
 
       - name: Run unit tests
-        run: pnpm run citest
+        run: pnpm exec c8 mocha --grep '#slow' --invert
+
+  # The tests tagged #slow, in parallel with the others: every example of every version, and
+  # every R4 invariant against fhirpath.js. Without coverage, which slows them by about 60%.
+  test-slow:
+    if: >
+      github.event_name != 'push' ||
+      !contains(github.event.head_commit.message, 'no-test')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Setup Environment
+        uses: panates/gh-setup-node@v2
+        with:
+          node-version: '24'
+          install: 'ci'
+
+      - name: Build
+        run: pnpm build
+
+      - name: Cache the FHIR packages
+        uses: actions/cache@v5
+        with:
+          path: support/fhir-packages
+          key: fhir-packages-${{ hashFiles('support/fetch-packages.mts') }}
+
+      - name: Fetch the FHIR packages
+        run: pnpm fetch-packages
+
+      - name: Run the slow tests
+        run: pnpm exec mocha --grep '#slow'

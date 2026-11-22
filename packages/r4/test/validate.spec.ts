@@ -151,7 +151,7 @@ describe('validate()', () => {
     ).toEqual([]);
   });
 
-  it("finds every invalid R4 example: the codec's 13 and the invariants' 8", function () {
+  it("finds every invalid R4 example: the codec's 13 and the invariants' 8 #slow", function () {
     if (!hasPackage(R4_EXAMPLES)) return this.skip();
     this.timeout(120000);
     const invalid: Record<string, string[]> = {};
