@@ -4,6 +4,7 @@ import { FhirServerError } from './fhir-server-error.js';
 import {
   dateRange,
   type SearchCriterion,
+  type SearchSort,
   type SearchValue,
 } from './search-query.js';
 
@@ -85,9 +86,53 @@ export class SearchMatcher {
         return dateRanges(item).some(([t1, t2]) => dateMatches(v, t1, t2));
       case 'reference':
         return this._reference(item, v, baseUrl);
+      case 'number':
+        return typeof item.v === 'number' && numberMatches(v, item.v);
+      case 'quantity':
+        return quantityMatches(item, v);
+      case 'uri':
+        return uriMatches(item, v.uri!, c.modifier);
       default:
         return false;
     }
+  }
+
+  /**
+   * The order of two resources by _sort: each parameter in turn, by its
+   * first value (the lowest ascending, the highest descending); a resource
+   * without a value comes last either way
+   */
+  compare(
+    a: Record<string, any>,
+    b: Record<string, any>,
+    sort: readonly SearchSort[],
+  ): number {
+    for (const s of sort) {
+      const ka = this._sortKey(a, s);
+      const kb = this._sortKey(b, s);
+      if (ka === kb) continue;
+      if (ka === undefined) return 1;
+      if (kb === undefined) return -1;
+      const c = ka < kb ? -1 : 1;
+      return s.descending ? -c : c;
+    }
+    return 0;
+  }
+
+  private _sortKey(
+    resource: Record<string, any>,
+    s: SearchSort,
+  ): number | string | undefined {
+    if (!s.param.expression) return;
+    let items: Item[];
+    try {
+      items = this._fp.compile(s.param.expression).evaluateItems(resource);
+    } catch {
+      return;
+    }
+    const keys = items.flatMap(i => sortKeys(s.param.type, i));
+    if (!keys.length) return;
+    return keys.reduce((x, y) => ((s.descending ? y > x : y < x) ? y : x));
   }
 
   private _reference(item: Item, v: SearchValue, baseUrl: string): boolean {
@@ -264,4 +309,130 @@ function dateMatches(v: SearchValue, t1: number, t2: number): boolean {
     }
   }
   return false;
+}
+
+/* ------------------------------------------------------------------ */
+/* Numbers and quantities                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A number against a value: eq and ne by the value's precision (100 is
+ * [99.5, 100.5)), the others by the number itself; ap within 10%
+ */
+function numberMatches(v: SearchValue, n: number): boolean {
+  const x = v.number!;
+  const eq = n >= v.start! && n < v.end!;
+  switch (v.prefix ?? 'eq') {
+    case 'eq':
+      return eq;
+    case 'ne':
+      return !eq;
+    case 'gt':
+    case 'sa':
+      return n > x;
+    case 'lt':
+    case 'eb':
+      return n < x;
+    case 'ge':
+      return n >= x || eq;
+    case 'le':
+      return n <= x || eq;
+    case 'ap':
+      return Math.abs(n - x) <= Math.abs(x) * 0.1;
+  }
+  return false;
+}
+
+/** The kinds of FHIR Quantity, and Money (a value and a currency) */
+const QUANTITIES = new Set([
+  'Quantity',
+  'Age',
+  'Count',
+  'Distance',
+  'Duration',
+  'SimpleQuantity',
+  'MoneyQuantity',
+  'Money',
+]);
+
+/**
+ * A quantity against a value: its number as for a number; a system and code
+ * given must be the quantity's; a code alone may be its code or its unit.
+ * Units are not converted (5 mg does not find 0.005 g).
+ */
+function quantityMatches(item: Item, v: SearchValue): boolean {
+  if (!QUANTITIES.has(item.t ?? '')) return false;
+  const q: any = item.v;
+  if (typeof q?.value !== 'number' || !numberMatches(v, q.value)) return false;
+  if (item.t === 'Money')
+    return v.code === undefined || (!v.system && q.currency === v.code);
+  if (v.system)
+    return q.system === v.system && (v.code === undefined || q.code === v.code);
+  if (v.code !== undefined) return q.code === v.code || q.unit === v.code;
+  return true;
+}
+
+/* ------------------------------------------------------------------ */
+/* URIs                                                               */
+/* ------------------------------------------------------------------ */
+
+/** A URI as it is; :below finds those under it (by path), :above those it is under */
+function uriMatches(
+  item: Item,
+  uri: string,
+  modifier: string | undefined,
+): boolean {
+  const val = item.v;
+  if (typeof val !== 'string') return false;
+  const under = (u: string, base: string) =>
+    u === base || u.startsWith(base.endsWith('/') ? base : base + '/');
+  if (modifier === 'below') return under(val, uri);
+  if (modifier === 'above') return under(uri, val);
+  return val === uri;
+}
+
+/* ------------------------------------------------------------------ */
+/* Sorting                                                            */
+/* ------------------------------------------------------------------ */
+
+/** What a value sorts by, for a parameter's type */
+function sortKeys(type: string, item: Item): (number | string)[] {
+  const val: any = item.v;
+  switch (type) {
+    case 'date':
+      return dateRanges(item)
+        .flatMap(([s, e]) => [s, e])
+        .filter(Number.isFinite);
+    case 'number':
+      return typeof val === 'number' ? [val] : [];
+    case 'quantity':
+      return typeof val?.value === 'number' ? [val.value] : [];
+    case 'string':
+      return strings(item).map(normalize);
+    case 'token': {
+      const codes =
+        item.t === 'CodeableConcept'
+          ? (val?.coding ?? []).map((c: any) => c?.code)
+          : item.t === 'Coding'
+            ? [val?.code]
+            : item.t === 'Identifier' || item.t === 'ContactPoint'
+              ? [val?.value]
+              : [val];
+      return codes
+        .filter(
+          (c: unknown): c is string | number =>
+            typeof c === 'string' || typeof c === 'number',
+        )
+        .map(String);
+    }
+    case 'reference':
+      return item.t === 'Reference' && typeof val?.reference === 'string'
+        ? [val.reference]
+        : typeof val === 'string'
+          ? [val]
+          : [];
+    case 'uri':
+      return typeof val === 'string' ? [val] : [];
+  }
+  return [];
 }

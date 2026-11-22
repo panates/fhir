@@ -18,6 +18,7 @@ import {
   SEARCH_TYPES,
   type SearchCriterion,
   type SearchQuery,
+  type SearchSort,
 } from './search-query.js';
 
 /** A step around each exchange: (request, next) => response, as in the client */
@@ -518,6 +519,28 @@ export class FhirServer {
       criteria.push(parseCriterion(param, modifier, value, isResourceType));
       applied.append(name, value);
     }
+    // _sort=-date,name: the parameters the store can sort by
+    const sort: SearchSort[] = [];
+    for (const item of params.getAll('_sort').flatMap(s => s.split(','))) {
+      const descending = item.startsWith('-');
+      const code = descending ? item.slice(1) : item;
+      const param = served.params.get(code);
+      if (!param || (served.caps.sort && !served.caps.sort.includes(code))) {
+        if (strict)
+          throw new FhirServerError(
+            400,
+            `${type} cannot be sorted by ${code}`,
+            'not-supported',
+          );
+        continue;
+      }
+      sort.push({ param, descending });
+    }
+    if (sort.length)
+      applied.set(
+        '_sort',
+        sort.map(s => (s.descending ? '-' : '') + s.param.code).join(','),
+      );
     const count = Math.min(
       intParam(params, '_count') ?? this.options.defaultCount ?? 50,
       this.options.maxCount ?? 500,
@@ -529,7 +552,9 @@ export class FhirServer {
       criteria,
       count,
       offset,
+      sort,
       matches: resource => this._matcher.matches(resource, criteria, baseUrl),
+      compare: (a, b) => this._matcher.compare(a, b, sort),
     };
     const page = await store.search!(type, query);
 

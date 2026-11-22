@@ -17,6 +17,7 @@ import {
 const fhir = new FhirContext(r4Model);
 const TCKN = 'urn:oid:2.16.840.1.113883.3.9900.1';
 const LOINC = 'http://loinc.org';
+const UCUM = 'http://unitsofmeasure.org';
 
 const RESOURCES = [
   {
@@ -72,6 +73,57 @@ const RESOURCES = [
       ],
     },
     subject: { reference: 'Group/g1' },
+  },
+  // values: quantities, probabilities, URIs
+  {
+    resourceType: 'Observation',
+    id: 'o4',
+    status: 'final',
+    code: { coding: [{ system: LOINC, code: '2345-7' }] },
+    subject: { reference: 'Patient/p3' },
+    effectiveDateTime: '2019-05-01',
+    valueQuantity: { value: 5.4, unit: 'mmol/L', system: UCUM, code: 'mmol/L' },
+  },
+  {
+    resourceType: 'Observation',
+    id: 'o5',
+    status: 'final',
+    code: { coding: [{ system: LOINC, code: '2345-7' }] },
+    subject: { reference: 'Patient/p3' },
+    effectiveDateTime: '2019-06-01',
+    valueQuantity: { value: 100, unit: 'mg/dL', system: UCUM, code: 'mg/dL' },
+  },
+  {
+    resourceType: 'RiskAssessment',
+    id: 'ra1',
+    status: 'final',
+    subject: { reference: 'Patient/p1' },
+    prediction: [{ probabilityDecimal: 0.25 }],
+  },
+  {
+    resourceType: 'RiskAssessment',
+    id: 'ra2',
+    status: 'final',
+    subject: { reference: 'Patient/p2' },
+    prediction: [{ probabilityDecimal: 0.8 }],
+  },
+  {
+    resourceType: 'ValueSet',
+    id: 'vs1',
+    status: 'active',
+    url: 'http://example.org/fhir/ValueSet/a',
+  },
+  {
+    resourceType: 'ValueSet',
+    id: 'vs2',
+    status: 'active',
+    url: 'http://example.org/fhir/ValueSet/a/b',
+  },
+  {
+    resourceType: 'ValueSet',
+    id: 'vs3',
+    status: 'active',
+    url: 'http://other.org/ValueSet/c',
   },
 ];
 
@@ -296,13 +348,112 @@ describe('FhirServer search over a MemoryStore', () => {
       _id: 'token',
       _lastUpdated: 'date',
     });
-    // number, quantity, uri and composite parameters are the next step
-    expect(
-      Object.values(byName).every(t =>
-        ['token', 'string', 'date', 'reference'].includes(t as string),
+    // composite and special parameters are not searched
+    const types = new Set(
+      cs.rest[0].resource.flatMap((r: any) =>
+        (r.searchParam ?? []).map((p: any) => p.type),
       ),
-    ).toBe(true);
+    );
+    expect([...types].sort()).toEqual([
+      'date',
+      'number',
+      'quantity',
+      'reference',
+      'string',
+      'token',
+      'uri',
+    ]);
     expect(fhir.validate(cs).valid).toBe(true);
+  });
+
+  it('finds numbers: eq and ne by precision, the other prefixes by the number', async () => {
+    expect(await ids('RiskAssessment?probability=0.25')).toEqual(['ra1']);
+    // 0.3 covers [0.25, 0.35); 0.30 covers [0.295, 0.305)
+    expect(await ids('RiskAssessment?probability=0.3')).toEqual(['ra1']);
+    expect(await ids('RiskAssessment?probability=0.30')).toEqual([]);
+    expect(await ids('RiskAssessment?probability=gt0.5')).toEqual(['ra2']);
+    expect(await ids('RiskAssessment?probability=lt0.5')).toEqual(['ra1']);
+    expect(await ids('RiskAssessment?probability=ge0.8')).toEqual(['ra2']);
+    expect(await ids('RiskAssessment?probability=ne0.25')).toEqual(['ra2']);
+    expect(await ids('RiskAssessment?probability=ap0.27')).toEqual(['ra1']);
+    expect(await refused('RiskAssessment?probability=high')).toBe(
+      '400 probability: "high" is not a number',
+    );
+  });
+
+  it('finds quantities by number, with a unit by system and code, or by code alone', async () => {
+    expect(await ids('Observation?value-quantity=5.4')).toEqual(['o4']);
+    expect(await ids(`Observation?value-quantity=5.4|${UCUM}|mmol/L`)).toEqual([
+      'o4',
+    ]);
+    expect(await ids('Observation?value-quantity=5.4||mmol/L')).toEqual(['o4']);
+    expect(await ids('Observation?value-quantity=5.4||mg/dL')).toEqual([]);
+    expect(await ids('Observation?value-quantity=gt50')).toEqual(['o5']);
+    expect(await ids(`Observation?value-quantity=lt50|${UCUM}|mmol/L`)).toEqual(
+      ['o4'],
+    );
+    expect(await ids('Observation?value-quantity:missing=false')).toEqual([
+      'o4',
+      'o5',
+    ]);
+    expect(await refused('Observation?value-quantity=a|b|c|d')).toBe(
+      '400 value-quantity: "a|b|c|d" is not a quantity',
+    );
+  });
+
+  it('finds URIs as they are, :below and :above by path', async () => {
+    expect(
+      await ids('ValueSet?url=http://example.org/fhir/ValueSet/a'),
+    ).toEqual(['vs1']);
+    expect(await ids('ValueSet?url:below=http://example.org/fhir')).toEqual([
+      'vs1',
+      'vs2',
+    ]);
+    expect(
+      await ids('ValueSet?url:below=http://example.org/fhir/ValueSet/a'),
+    ).toEqual(['vs1', 'vs2']);
+    expect(
+      await ids('ValueSet?url:above=http://example.org/fhir/ValueSet/a/b'),
+    ).toEqual(['vs1', 'vs2']);
+    expect(await ids('ValueSet?url=http://example.org/fhir/ValueSet')).toEqual(
+      [],
+    );
+  });
+
+  it('sorts with _sort: ascending, descending, by several parameters', async () => {
+    const order = async (query: string) =>
+      ((await (await s.fetch(query)).json()).entry ?? []).map(
+        (e: any) => e.resource.id,
+      );
+    // 1980 starts before 1980-02-03, and ends after it
+    expect(await order('Patient?_sort=birthdate')).toEqual(['p3', 'p1', 'p2']);
+    expect(await order('Patient?_sort=-birthdate')).toEqual(['p2', 'p3', 'p1']);
+    // Kaya, Öztürk, Yılmaz: without accents
+    expect(await order('Patient?_sort=family')).toEqual(['p2', 'p3', 'p1']);
+    expect(await order('Patient?_sort=gender,-birthdate')).toEqual([
+      'p1',
+      'p2',
+      'p3',
+    ]);
+    expect(
+      await order('Observation?code=2345-7&_sort=-value-quantity'),
+    ).toEqual(['o5', 'o4']);
+    // a resource without the value comes last
+    expect(await order('Patient?_sort=identifier')).toEqual(['p1', 'p2', 'p3']);
+    const bundle = await (
+      await s.fetch('Patient?gender=male&_sort=-birthdate,foo&_count=1')
+    ).json();
+    expect(bundle.link[0].url).toBe(
+      `${s.base}/Patient?gender=male&_sort=-birthdate&_count=1`,
+    );
+    expect(bundle.link[1].url).toBe(
+      `${s.base}/Patient?gender=male&_sort=-birthdate&_count=1&_offset=1`,
+    );
+    expect(
+      await refused('Patient?_sort=foo', {
+        headers: { Prefer: 'handling=strict' },
+      }),
+    ).toBe('400 Patient cannot be sorted by foo');
   });
 });
 
@@ -371,6 +522,33 @@ describe('FhirServer search through a store of its own', () => {
     expect(cs.rest[0].resource[0].searchParam.map((p: any) => p.name)).toEqual([
       'identifier',
     ]);
+  });
+
+  it('sorts only by what the store names in sort, and gives the store the order', async () => {
+    const store = new Tckn();
+    store.capabilities = () => ({
+      interactions: ['search'],
+      versions: 'none',
+      searchParams: ['identifier', 'birthdate'],
+      sort: ['birthdate'],
+    });
+    const server = new FhirServer({
+      fhir,
+      stores: { Patient: store },
+      resources: ['Patient'],
+    });
+    await server.handle(
+      new Request('http://localhost/Patient?_sort=-birthdate,identifier'),
+    );
+    expect(
+      store.queries[0].sort.map(s => [s.param.code, s.descending]),
+    ).toEqual([['birthdate', true]]);
+    const strict = await server.handle(
+      new Request('http://localhost/Patient?_sort=identifier', {
+        headers: { Prefer: 'handling=strict' },
+      }),
+    );
+    expect(strict.status).toBe(400);
   });
 
   it('refuses a store that names a parameter the type does not have', () => {

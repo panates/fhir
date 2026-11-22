@@ -9,15 +9,25 @@ export type SearchPrefix =
 export interface SearchValue {
   /** As written in the URL, escapes removed */
   raw: string;
-  /** date: the comparison (eq when not written) */
+  /** date, number, quantity: the comparison (eq when not written) */
   prefix?: SearchPrefix;
-  /** token: the system before '|'; '' for '|code' (no system); undefined when no '|' */
+  /**
+   * token: the system before '|'; '' for '|code' (no system); undefined when
+   * no '|'. quantity: the unit's system; '' or undefined for any.
+   */
   system?: string;
-  /** token: the code (or identifier value); undefined for 'system|' */
+  /** token: the code (or identifier value); undefined for 'system|'. quantity: the unit's code */
   code?: string;
-  /** date: the instants the value covers, [start, end) in milliseconds */
+  /**
+   * date: the instants the value covers, [start, end) in milliseconds.
+   * number, quantity: the numbers it covers by its precision (100 is
+   * [99.5, 100.5)), with the number itself in `number`.
+   */
   start?: number;
   end?: number;
+  number?: number;
+  /** uri: the URI */
+  uri?: string;
   /** reference: the type, when given ('Patient/1', or the :Patient modifier) */
   type?: string;
   /** reference: the id; or the whole URL of an absolute reference in `url` */
@@ -43,12 +53,23 @@ export interface SearchQuery {
   count: number;
   /** The matches to skip, for the next page */
   offset: number;
+  /** _sort: the parameters to order by, the first first; none for the store's own order */
+  sort: SearchSort[];
   /**
    * Whether a resource (in its JSON form) matches every criterion, by the
    * FHIRPath expressions of the parameters. A store that searches a database
    * translates the criteria instead; the memory store calls this.
    */
   matches(resource: Record<string, any>): boolean;
+  /** The order of two resources by `sort`, by FHIRPath, as for matches() */
+  compare(a: Record<string, any>, b: Record<string, any>): number;
+}
+
+/** A parameter to sort by */
+export interface SearchSort {
+  param: FhirSearchParameter;
+  /** _sort=-date */
+  descending: boolean;
 }
 
 /** The parameter types the server parses */
@@ -57,6 +78,9 @@ export const SEARCH_TYPES: ReadonlySet<FhirSearchParamType> = new Set([
   'string',
   'date',
   'reference',
+  'number',
+  'quantity',
+  'uri',
 ]);
 
 /** The modifiers each type takes (a reference also takes a resource type) */
@@ -65,6 +89,9 @@ const MODIFIERS: Record<string, ReadonlySet<string>> = {
   token: new Set(['not', 'text', 'missing']),
   date: new Set(['missing']),
   reference: new Set(['missing']),
+  number: new Set(['missing']),
+  quantity: new Set(['missing']),
+  uri: new Set(['below', 'above', 'missing']),
 };
 
 const PREFIXES = new Set([
@@ -80,7 +107,44 @@ const PREFIXES = new Set([
 ]);
 
 /** Search parameters the server reads itself; they are not criteria */
-export const RESULT_PARAMS = new Set(['_count', '_offset', '_format']);
+export const RESULT_PARAMS = new Set(['_count', '_offset', '_format', '_sort']);
+
+/** A prefix at the start of a value followed by a digit (or a sign), and the rest */
+function prefixOf(raw: string): [SearchPrefix | undefined, string] {
+  const p = raw.slice(0, 2);
+  return PREFIXES.has(p) && /^[-+\d.]/.test(raw.slice(2))
+    ? [p as SearchPrefix, raw.slice(2)]
+    : [undefined, raw];
+}
+
+/**
+ * A number and the range its precision gives: '100' is [99.5, 100.5),
+ * '1.50' [1.495, 1.505), '1e2' [50, 150). Undefined when it is not a number.
+ */
+export function numberRange(
+  text: string,
+): [number, number, number] | undefined {
+  const m = /^([+-]?)(\d*)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(text);
+  if (!m || (!m[2] && !m[3])) return;
+  const n = Number(text);
+  const half = 10 ** (Number(m[4] ?? 0) - (m[3]?.length ?? 0)) / 2;
+  return [n - half, n + half, n];
+}
+
+/** Splits on the '|' that are not escaped, and removes the escapes */
+function splitBars(raw: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] === '\\' && i + 1 < raw.length) cur += raw[++i];
+    else if (raw[i] === '|') {
+      out.push(cur);
+      cur = '';
+    } else cur += raw[i];
+  }
+  out.push(cur);
+  return out;
+}
 
 /** Splits a value on the commas that are not escaped, and removes the escapes */
 export function splitValues(text: string): string[] {
@@ -166,13 +230,30 @@ function parseValue(
         );
       break;
     }
+    case 'number':
+    case 'quantity': {
+      const [prefix, text] = prefixOf(raw);
+      if (prefix) v.prefix = prefix;
+      const [num, system, code] =
+        param.type === 'quantity' ? splitBars(text) : [text];
+      const range = numberRange(num);
+      if (!range || (param.type === 'quantity' && splitBars(text).length > 3))
+        throw new FhirServerError(
+          400,
+          `${param.code}: "${raw}" is not a ${param.type}`,
+          'value',
+        );
+      [v.start, v.end, v.number] = range;
+      if (system) v.system = system;
+      if (code) v.code = code;
+      break;
+    }
+    case 'uri':
+      v.uri = raw;
+      break;
     case 'date': {
-      let text = raw;
-      const p = text.slice(0, 2);
-      if (PREFIXES.has(p) && /^\d/.test(text.slice(2))) {
-        v.prefix = p as SearchPrefix;
-        text = text.slice(2);
-      }
+      const [prefix, text] = prefixOf(raw);
+      if (prefix) v.prefix = prefix;
       const range = dateRange(text);
       if (!range)
         throw new FhirServerError(

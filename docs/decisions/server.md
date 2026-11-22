@@ -237,7 +237,8 @@ and its parsing), `search-match.ts` (`SearchMatcher`, by FHIRPath), `_search()` 
 `fhir-server.ts`, `MemoryStore.search()`.
 
 - **Types:** token, string, date and reference, with `_id` and `_lastUpdated`. A parameter of
-  another type (number, quantity, uri, composite, special) is treated as unknown for now.
+  another type (number, quantity, uri, composite, special) is treated as unknown for now; the
+  second part below adds number, quantity and uri.
 - **Modifiers:** string `:exact`, `:contains`, `:missing`; token `:not`, `:text`, `:missing`; date
   and reference `:missing`; a resource type on a reference (`subject:Patient`). Any other
   modifier is refused (400), as the specification asks.
@@ -264,7 +265,7 @@ and its parsing), `search-match.ts` (`SearchMatcher`, by FHIRPath), `_search()` 
 - **Unknown parameters** are left out, and out of the `self` link; with
   `Prefer: handling=strict` they are refused (400).
 - **Paging** as for history: `_count` (default 50, at most 500), `_offset` in `next` and
-  `previous`. Results come in the store's order; `_sort` is the next step.
+  `previous`. Results come in the store's order; `_sort` came in the second part.
 
 Tests: `packages/server/test/search.spec.ts`, 12: each type with its modifiers and prefixes on
 three Patients and three Observations (Turkish names among them), paging, POST, unknown
@@ -272,6 +273,38 @@ parameters, refused values, the `CapabilityStatement`, a store that answers one 
 gets the parsed criteria, `dateRange()`. Control runs: without reading `ı` as `i`, with `eq` as
 overlap, without `resolve()`, with `|code` ignoring the system, and without `handling=strict`, a
 test fails each time. 240 tests before, 252 after.
+
+## Built: search, second part (2026-11-22)
+
+Number, quantity and uri parameters, and `_sort`.
+
+- **Numbers:** `eq` and `ne` by the value's precision, as the specification says: `100` covers
+  [99.5, 100.5), `0.3` covers [0.25, 0.35), `0.30` covers [0.295, 0.305), `1e2` covers [50, 150).
+  `gt`, `lt`, `ge`, `le` compare with the number itself; `sa` and `eb` as `gt` and `lt`; `ap`
+  within 10% of it.
+- **Quantities:** `[prefix]number|system|code`, `number||code` or `number`, on a Quantity (and
+  Age, Count, Distance, Duration, SimpleQuantity) or a Money. The number as for numbers; a system
+  given must be the quantity's, with its code; a code alone may be the code or the unit. **Units
+  are not converted**: `5|http://unitsofmeasure.org|mg` does not find 0.005 g. The FHIRPath
+  package has a UCUM subset that could do it; that is left for when a store needs it.
+- **URIs:** as they are; `:below` finds the URIs under the value by path
+  (`url:below=http://example.org/fhir`), `:above` those the value is under. A canonical's
+  `|version` is not split off.
+- **`_sort`:** `_sort=-date,name`, by parameters of any type above. Each resource sorts by its
+  first value of the parameter: the lowest ascending, the highest descending (a date by the start
+  of its range ascending and the end descending, so `1980` comes before `1980-02-03` ascending
+  and after it descending); a resource without the value comes last either way. A store names
+  what it can sort by in `sort`; the others, and unknown names, are left out of the query and
+  the links, or refused with `handling=strict`. `query.sort` gives the store the order, and
+  `query.compare()` compares two resources by FHIRPath, as `MemoryStore` sorts.
+- **Composite and special parameters** stay unsearched.
+
+Tests: 5 more in `packages/server/test/search.spec.ts`, on two RiskAssessments, two Observations
+with quantities and three ValueSets: each prefix of a number, quantities with and without units,
+`:below` and `:above`, `_sort` ascending, descending, by two parameters, with missing values,
+and a store that names what it sorts by. Control runs: `eq` of a number without its precision,
+a quantity's unit ignored, `:below` as equality, the memory store not sorting, and descending
+ignored, a test fails each time. 252 tests before, 257 after.
 
 ## Not in the first version
 

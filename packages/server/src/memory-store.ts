@@ -135,6 +135,8 @@ export class MemoryStore implements FhirStore {
       const s = stored(v);
       if (query.matches(s.resource!)) matches.push(s);
     }
+    if (query.sort.length)
+      matches.sort((a, b) => query.compare(a.resource!, b.resource!));
     return {
       items: matches.slice(query.offset, query.offset + query.count),
       total: matches.length,
