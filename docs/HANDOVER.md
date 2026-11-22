@@ -28,7 +28,7 @@ say: how to work in the repository, what is open, and what to watch for.
 | `@fhirjs/fhirpath` | `packages/fhirpath` | Our own FHIRPath engine: hand-written lexer and Pratt parser, evaluator, functions, a UCUM subset, and `check()` (static type checking). No dependency; the FHIR model comes through the `FhirPathModel` interface |
 | `@fhirjs/r4`, `@fhirjs/r4b`, `@fhirjs/r5` | `packages/r4`, `packages/r4b`, `packages/r5` | Generated classes of FHIR 4.0.1, 4.3.0 and 5.0.0, with the codes of their required value sets and `r4Model` / `r4bModel` / `r5Model` |
 | `@fhirjs/client` | `packages/client` | REST client (`FhirClient`), search paging, conditional interactions, `bearerToken()`, SMART on FHIR (discovery, backend services, app launch with PKCE, id_token verification) |
-| `@fhirjs/server` | `packages/server` | Read, write, history and search (every parameter type but composite and special, `_sort`), conditional interactions, JSON Patch and `$validate` built: the first version of the design is complete. SMART authorization next. Designed in [`decisions/server.md`](decisions/server.md): a fetch-style handler, a store per resource type (an in-memory one, or a facade over an existing database that declares what it supports), the core of the REST API first |
+| `@fhirjs/server` | `packages/server` | Read, write, history and search (every parameter type but composite and special, `_sort`), conditional interactions, JSON Patch and `$validate` built: the first version of the design is complete. Authentication and authorization next, designed in [`decisions/server-auth.md`](decisions/server-auth.md). Designed in [`decisions/server.md`](decisions/server.md): a fetch-style handler, a store per resource type (an in-memory one, or a facade over an existing database that declares what it supports), the core of the REST API first |
 
 ## Working in the repository
 
@@ -110,7 +110,8 @@ All are recorded in section 13 of the design document. In short:
    Built: the package, `FhirStore` and `MemoryStore`, read and write interactions, history, and
    search with token, string, date, reference, number, quantity and uri parameters and `_sort`.
    Conditional interactions, JSON Patch and `$validate` are built too: the first version of the
-   design is complete. Next, as designed: SMART authorization (token checks, scopes); then batch
+   design is complete. Next: authentication and authorization, designed in
+   [`decisions/server-auth.md`](decisions/server-auth.md); then batch
    and transaction, `_include` and chained search.
 2. The repository standards that still fail (`repo-check`) are GitHub settings only, the user's
    to change: merge commits only, a ruleset on `main`, read-only default workflow permission,
