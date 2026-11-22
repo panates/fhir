@@ -4,6 +4,7 @@ import { FhirServerError } from './fhir-server-error.js';
 import {
   dateRange,
   type SearchCriterion,
+  type SearchLookup,
   type SearchSort,
   type SearchValue,
 } from './search-query.js';
@@ -37,15 +38,62 @@ export class SearchMatcher {
     resource: Record<string, any>,
     criteria: readonly SearchCriterion[],
     baseUrl = '',
+    lookup?: SearchLookup,
   ): boolean {
-    return criteria.every(c => this._matches(resource, c, baseUrl));
+    return criteria.every(c => this._matches(resource, c, baseUrl, lookup));
+  }
+
+  /**
+   * The resources a resource refers to by a reference parameter, as
+   * `Type/id`: the local ones only (relative, or absolute under `baseUrl`)
+   */
+  references(
+    resource: Record<string, any>,
+    param: SearchCriterion['param'],
+    baseUrl = '',
+  ): string[] {
+    const out: string[] = [];
+    for (const item of this._values(resource, { param, values: [] })) {
+      const ref = localReference(item, baseUrl);
+      if (ref && !out.includes(ref)) out.push(ref);
+    }
+    return out;
   }
 
   private _matches(
     resource: Record<string, any>,
     c: SearchCriterion,
     baseUrl: string,
+    lookup: SearchLookup | undefined,
   ): boolean {
+    if (c.chain || c.has) {
+      if (!lookup)
+        throw new FhirServerError(
+          500,
+          `${c.param.code}: a chained criterion needs the store's resources`,
+          'exception',
+        );
+      if (c.chain) {
+        const chain = c.chain;
+        return this.references(resource, c.param, baseUrl).some(ref => {
+          const [type, id] = ref.split('/');
+          if (type !== chain.type) return false;
+          const target = lookup.read(type, id);
+          return (
+            !!target && this.matches(target, chain.criteria, baseUrl, lookup)
+          );
+        });
+      }
+      const has = c.has!;
+      const self = `${resource.resourceType}/${resource.id}`;
+      for (const r of lookup.all(has.type))
+        if (
+          this.references(r, c.param, baseUrl).includes(self) &&
+          this.matches(r, has.criteria, baseUrl, lookup)
+        )
+          return true;
+      return false;
+    }
     const items = this._values(resource, c);
     if (c.missing !== undefined) return c.missing === !items.length;
     const any = c.values.some(v =>
@@ -136,13 +184,7 @@ export class SearchMatcher {
   }
 
   private _reference(item: Item, v: SearchValue, baseUrl: string): boolean {
-    const val: any = item.v;
-    let ref: string | undefined =
-      item.t === 'Reference'
-        ? val?.reference
-        : typeof val === 'string'
-          ? val
-          : undefined;
+    let ref = referenceText(item);
     if (!ref) return false;
     ref = ref.replace(/\/_history\/[^/]+$/, '');
     if (v.url && ref === v.url) return true;
@@ -153,6 +195,28 @@ export class SearchMatcher {
     if (!m) return false;
     return m[2] === v.id && (!v.type || m[1] === v.type);
   }
+}
+
+/** The text of a reference item: a Reference's reference, or a canonical or uri */
+function referenceText(item: Item): string | undefined {
+  const val: any = item.v;
+  const ref =
+    item.t === 'Reference'
+      ? val?.reference
+      : typeof val === 'string'
+        ? val
+        : undefined;
+  return typeof ref === 'string' && ref ? ref : undefined;
+}
+
+/** A local reference as Type/id: relative, or absolute under the base; undefined otherwise */
+function localReference(item: Item, baseUrl: string): string | undefined {
+  let ref = referenceText(item);
+  if (!ref) return;
+  ref = ref.replace(/\/_history\/[^/]+$/, '');
+  if (baseUrl && ref.startsWith(baseUrl + '/'))
+    ref = ref.slice(baseUrl.length + 1);
+  return /^[A-Z][A-Za-z]+\/[A-Za-z0-9\-.]{1,64}$/.test(ref) ? ref : undefined;
 }
 
 /* ------------------------------------------------------------------ */

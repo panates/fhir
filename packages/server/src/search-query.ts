@@ -35,7 +35,18 @@ export interface SearchValue {
   url?: string;
 }
 
-/** A search parameter with its values: a resource matches when one of the values does (OR) */
+/**
+ * A search parameter with its values: a resource matches when one of the
+ * values does (OR).
+ *
+ * A chained criterion (`subject:Patient.name=ali`) has `chain` and no
+ * values: `param` is the reference parameter, and the resource matches when
+ * one of the resources it refers to by `param` is a `chain.type` matching
+ * every one of `chain.criteria`. A reverse chain (`_has:Observation:patient:code=x`)
+ * has `has`: `param` is the parameter of `has.type` that refers back, and
+ * the resource matches when a `has.type` refers to it by `param` and matches
+ * every one of `has.criteria`. Their criteria can be chained in turn.
+ */
 export interface SearchCriterion {
   param: FhirSearchParameter;
   /** :exact, :contains, :missing, :not, :text, or a resource type for a reference */
@@ -43,6 +54,25 @@ export interface SearchCriterion {
   /** :missing: true or false */
   missing?: boolean;
   values: SearchValue[];
+  chain?: SearchChain;
+  has?: SearchChain;
+}
+
+/** The resources a chain or a reverse chain goes to, and what they must match */
+export interface SearchChain {
+  type: string;
+  criteria: SearchCriterion[];
+}
+
+/**
+ * The resources of the store, for matching chains in memory: what the
+ * memory store gives matches()
+ */
+export interface SearchLookup {
+  /** The current resource; undefined when there is none or it is deleted */
+  read(type: string, id: string): Record<string, any> | undefined;
+  /** The current resources of a type */
+  all(type: string): Iterable<Record<string, any>>;
 }
 
 /** A parsed search: a resource matches when it matches every criterion (AND) */
@@ -58,9 +88,10 @@ export interface SearchQuery {
   /**
    * Whether a resource (in its JSON form) matches every criterion, by the
    * FHIRPath expressions of the parameters. A store that searches a database
-   * translates the criteria instead; the memory store calls this.
+   * translates the criteria instead; the memory store calls this. Chained
+   * criteria need `lookup`, the other resources of the store.
    */
-  matches(resource: Record<string, any>): boolean;
+  matches(resource: Record<string, any>, lookup?: SearchLookup): boolean;
   /** The order of two resources by `sort`, by FHIRPath, as for matches() */
   compare(a: Record<string, any>, b: Record<string, any>): number;
 }
@@ -107,7 +138,16 @@ const PREFIXES = new Set([
 ]);
 
 /** Search parameters the server reads itself; they are not criteria */
-export const RESULT_PARAMS = new Set(['_count', '_offset', '_format', '_sort']);
+export const RESULT_PARAMS = new Set([
+  '_count',
+  '_offset',
+  '_format',
+  '_sort',
+  '_include',
+  '_revinclude',
+  '_include:iterate',
+  '_revinclude:iterate',
+]);
 
 /** A prefix at the start of a value followed by a digit (or a sign), and the rest */
 function prefixOf(raw: string): [SearchPrefix | undefined, string] {

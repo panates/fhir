@@ -29,6 +29,7 @@ import {
   SEARCH_TYPES,
   type SearchCriterion,
   type SearchQuery,
+  type SearchValue,
   type SearchSort,
 } from './search-query.js';
 
@@ -57,6 +58,8 @@ export interface FhirServerOptions {
   maxCount?: number;
   /** The most entries a batch or transaction Bundle may have (default 100) */
   maxBundleEntries?: number;
+  /** The most resources _include and _revinclude add to a page (default 1000) */
+  maxIncludes?: number;
   /** The software name in the CapabilityStatement */
   name?: string;
   /**
@@ -85,6 +88,10 @@ const JSON_TYPES = new Set([
 const JSON_FORMATS = new Set(['json', ...JSON_TYPES]);
 /** A FHIR id, and a version id */
 const ID = /^[A-Za-z0-9\-.]{1,64}$/;
+/** The links a chain may have: subject:Patient.organization.name is two */
+const MAX_CHAIN = 3;
+/** The rounds of :iterate after the first include */
+const MAX_ITERATE = 3;
 
 /** The store method each interaction needs */
 const METHOD: Record<FhirStoreInteraction, keyof FhirStore | undefined> = {
@@ -1197,9 +1204,14 @@ export class FhirServer {
           true,
         ).query.criteria,
       );
+    await this._authorizeChains(ctx, query.criteria);
+    const includes = this._includeSpecs(params, strict, applied);
     const { count, offset } = query;
     const baseUrl = ctx.baseUrl;
     const page = await store.search!(type, query, ctx.context);
+    const included = includes.length
+      ? await this._included(ctx, page.items, includes)
+      : { items: [], complete: true };
 
     const link = (rel: string, at: number) => {
       const p = new URLSearchParams(applied);
@@ -1220,13 +1232,195 @@ export class FhirServer {
     };
     if (page.total !== undefined) bundle.total = page.total;
     bundle.link = links;
-    if (page.items.length)
-      bundle.entry = page.items.map(s => ({
+    const entry = [
+      ...page.items.map(s => ({
         fullUrl: `${baseUrl}/${s.type}/${s.id}`,
         resource: this._json(s),
         search: { mode: 'match' },
-      }));
+      })),
+      ...included.items.map(s => ({
+        fullUrl: `${baseUrl}/${s.type}/${s.id}`,
+        resource: this._json(s),
+        search: { mode: 'include' },
+      })),
+    ];
+    if (!included.complete)
+      entry.push({
+        resource: {
+          resourceType: 'OperationOutcome',
+          issue: [
+            {
+              severity: 'warning',
+              code: 'too-costly',
+              diagnostics: `More resources are included than this server gives (${this.options.maxIncludes ?? 1000}); the rest are left out`,
+            },
+          ],
+        },
+        search: { mode: 'outcome' },
+      } as any);
+    if (entry.length) bundle.entry = entry;
     return jsonResponse(200, JSON.stringify(bundle));
+  }
+
+  /**
+   * _include and _revinclude (and their :iterate), read: `Type:parameter`
+   * or `Type:parameter:TargetType`. Those the server cannot follow are
+   * unknown parameters: left out of `applied`, or refused when strict.
+   */
+  private _includeSpecs(
+    params: URLSearchParams,
+    strict: boolean,
+    applied: URLSearchParams,
+  ): IncludeSpec[] {
+    const model = this.fhir.model;
+    const specs: IncludeSpec[] = [];
+    for (const [name, value] of params) {
+      const [what, modifier] = name.split(':');
+      if (what !== '_include' && what !== '_revinclude') continue;
+      const rev = what === '_revinclude';
+      const [source, code, target, ...extra] = value.split(':');
+      let why: string | undefined;
+      const param =
+        source && code ? model.getSearchParameter(source, code) : undefined;
+      if (!source || !code || extra.length)
+        why = `${name}=${value}: it takes [type]:[parameter] or [type]:[parameter]:[target type]`;
+      else if (param?.type !== 'reference' || !param.expression)
+        why = `${name}=${value}: ${source} has no reference parameter ${code}`;
+      else if (
+        target !== undefined &&
+        (!model.resourceTypes().includes(target) ||
+          (param.target?.length && !param.target.includes(target)))
+      )
+        why = `${name}=${value}: ${source}.${code} does not refer to ${target}`;
+      else if (rev && !this._served.get(source)?.params.has(code))
+        why = `${name}=${value}: ${source} cannot be searched by ${code}`;
+      else if (modifier !== undefined && modifier !== 'iterate')
+        why = `${name}: the modifier is not supported`;
+      if (why) {
+        if (strict) throw new FhirServerError(400, why, 'not-supported');
+        continue;
+      }
+      specs.push({
+        rev,
+        iterate: modifier === 'iterate',
+        source,
+        param: param!,
+        target,
+      });
+      applied.append(name, value);
+    }
+    return specs;
+  }
+
+  /**
+   * The resources a page's matches include: those they refer to (_include)
+   * and those that refer to them (_revinclude), each once; then, for the
+   * :iterate ones, those the included ones include, up to MAX_ITERATE
+   * rounds. The resources the caller may not see are left out. At most
+   * maxIncludes; `complete` is false when there were more.
+   */
+  private async _included(
+    ctx: Exchange,
+    matches: StoredResource[],
+    specs: IncludeSpec[],
+  ): Promise<{ items: StoredResource[]; complete: boolean }> {
+    const max = this.options.maxIncludes ?? 1000;
+    const seen = new Set(matches.map(s => `${s.type}/${s.id}`));
+    const items: StoredResource[] = [];
+    let complete = true;
+    let frontier = matches;
+    for (let round = 0; round <= MAX_ITERATE && frontier.length; round++) {
+      const found: StoredResource[] = [];
+      const add = (s: StoredResource) => {
+        const key = `${s.type}/${s.id}`;
+        if (seen.has(key)) return;
+        if (items.length >= max) {
+          complete = false;
+          return;
+        }
+        seen.add(key);
+        items.push(s);
+        found.push(s);
+      };
+      for (const spec of specs) {
+        if (round > 0 && !spec.iterate) continue;
+        if (!spec.rev) {
+          for (const r of frontier) {
+            if (r.type !== spec.source || !r.resource) continue;
+            for (const ref of this._matcher.references(
+              r.resource,
+              spec.param,
+              ctx.baseUrl,
+            )) {
+              const [type, id] = ref.split('/');
+              if (seen.has(ref) || (spec.target && type !== spec.target))
+                continue;
+              const s = await this._includable(ctx, type, id);
+              if (s) add(s);
+            }
+          }
+          continue;
+        }
+        // _revinclude: a search of the source type for references to the frontier
+        const values: SearchValue[] = frontier
+          .filter(
+            r =>
+              r.resource &&
+              (!spec.target || r.type === spec.target) &&
+              (!spec.param.target?.length ||
+                spec.param.target.includes(r.type)),
+          )
+          .map(r => ({ raw: `${r.type}/${r.id}`, type: r.type, id: r.id }));
+        if (!values.length) continue;
+        const d = await this._decision(ctx, 'search', spec.source);
+        if (!d.allowed) continue;
+        const served = this._servedOf(ctx, spec.source)!;
+        const { query } = this._query(
+          new URLSearchParams(d.criteria ?? ''),
+          spec.source,
+          served,
+          ctx.baseUrl,
+          true,
+        );
+        query.criteria.push({ param: spec.param, values });
+        query.count = max - items.length + 1;
+        const page = await served.store.search!(
+          spec.source,
+          query,
+          ctx.context,
+        );
+        for (const s of page.items)
+          if (
+            s.resource &&
+            (await this._may(ctx, 'search', s.type, s.resource))
+          )
+            add(s);
+        if (page.total !== undefined && page.total > page.items.length)
+          complete = false;
+      }
+      frontier = found;
+    }
+    return { items, complete };
+  }
+
+  /** A resource to include, when it is served, exists and the caller may read it */
+  private async _includable(
+    ctx: Exchange,
+    type: string,
+    id: string,
+  ): Promise<StoredResource | undefined> {
+    const served = this._servedOf(ctx, type);
+    if (
+      !served ||
+      !served.caps.interactions.includes('read') ||
+      typeof served.store.read !== 'function'
+    )
+      return;
+    if (!(await this._decision(ctx, 'read', type, id)).allowed) return;
+    const s = await served.store.read(type, id, ctx.context);
+    if (!s?.resource || !(await this._may(ctx, 'read', type, s.resource)))
+      return;
+    return s;
   }
 
   /**
@@ -1240,26 +1434,23 @@ export class FhirServer {
     baseUrl: string,
     strict: boolean,
   ): { query: SearchQuery; applied: URLSearchParams } {
-    const isResourceType = (name: string) =>
-      this.fhir.model.resourceTypes().includes(name);
     const criteria: SearchCriterion[] = [];
     const applied = new URLSearchParams();
     for (const [name, value] of params) {
-      if (RESULT_PARAMS.has(name)) continue;
-      const colon = name.indexOf(':');
-      const code = colon < 0 ? name : name.slice(0, colon);
-      const modifier = colon < 0 ? undefined : name.slice(colon + 1);
-      const param = served.params.get(code);
-      if (!param || code.includes('.')) {
+      if (RESULT_PARAMS.has(name.split(':')[0])) continue;
+      const c = this._criterion(name, value, type, served, 0);
+      if (typeof c === 'string') {
         if (strict)
           throw new FhirServerError(
             400,
-            `Unknown search parameter ${name} for ${type}`,
+            name.includes('.') || name.startsWith('_has:')
+              ? `${name}: ${c}`
+              : c,
             'not-supported',
           );
         continue;
       }
-      criteria.push(parseCriterion(param, modifier, value, isResourceType));
+      criteria.push(c);
       applied.append(name, value);
     }
     // _sort=-date,name: the parameters the store can sort by
@@ -1295,10 +1486,159 @@ export class FhirServer {
       count,
       offset,
       sort,
-      matches: resource => this._matcher.matches(resource, criteria, baseUrl),
+      matches: (resource, lookup) =>
+        this._matcher.matches(resource, criteria, baseUrl, lookup),
       compare: (a, b) => this._matcher.compare(a, b, sort),
     };
     return { query, applied };
+  }
+
+  /**
+   * One parameter of a search on a type: a criterion, chained
+   * (`subject:Patient.name`) or reverse-chained (`_has:Observation:patient:code`)
+   * when the store answers chains, or why it is not one the server can take
+   * (an unknown parameter). Throws 400 for one it cannot read.
+   */
+  private _criterion(
+    name: string,
+    value: string,
+    type: string,
+    served: Served,
+    depth: number,
+  ): SearchCriterion | string {
+    const model = this.fhir.model;
+    const isResourceType = (t: string) => model.resourceTypes().includes(t);
+    if (name.startsWith('_has:')) {
+      const [, from, code, ...rest] = name.split(':');
+      if (!from || !code || !rest.length)
+        throw new FhirServerError(
+          400,
+          `${name}: _has takes _has:[type]:[parameter]:[criterion]`,
+          'value',
+        );
+      const why = this._chainable(type, from, depth);
+      if (why) return why;
+      const fromServed = this._served.get(from)!;
+      const param = fromServed.params.get(code);
+      if (param?.type !== 'reference')
+        return `${from} cannot be searched by a reference parameter ${code}`;
+      if (param.target?.length && !param.target.includes(type))
+        return `${from}.${code} does not refer to ${type}`;
+      const inner = this._criterion(
+        rest.join(':'),
+        value,
+        from,
+        fromServed,
+        depth + 1,
+      );
+      if (typeof inner === 'string') return inner;
+      return { param, values: [], has: { type: from, criteria: [inner] } };
+    }
+    const dot = name.indexOf('.');
+    if (dot > 0) {
+      const head = name.slice(0, dot);
+      const rest = name.slice(dot + 1);
+      const colon = head.indexOf(':');
+      const code = colon < 0 ? head : head.slice(0, colon);
+      const modifier = colon < 0 ? undefined : head.slice(colon + 1);
+      const param = served.params.get(code);
+      if (param?.type !== 'reference')
+        return `${type} cannot be searched by a reference parameter ${code}`;
+      let target = modifier;
+      if (target !== undefined) {
+        if (
+          !isResourceType(target) ||
+          (param.target?.length && !param.target.includes(target))
+        )
+          throw new FhirServerError(
+            400,
+            `${name}: ${type}.${code} does not refer to ${target}`,
+            'value',
+          );
+      } else {
+        // the one type it refers to that can be searched by the next link
+        const next = rest.startsWith('_has:') ? '_id' : rest.split(/[.:]/)[0];
+        const targets = (param.target ?? []).filter(t =>
+          this._served.get(t)?.params.has(next),
+        );
+        if (targets.length > 1)
+          throw new FhirServerError(
+            400,
+            `${name}: ${type}.${code} refers to ${targets.join(', ')}; name the type, as ${code}:${targets[0]}.${rest}`,
+            'value',
+          );
+        if (!targets.length)
+          return `no type ${type}.${code} refers to can be searched by ${next}`;
+        target = targets[0];
+      }
+      const why = this._chainable(type, target, depth);
+      if (why) return why;
+      const inner = this._criterion(
+        rest,
+        value,
+        target,
+        this._served.get(target)!,
+        depth + 1,
+      );
+      if (typeof inner === 'string') return inner;
+      return {
+        param,
+        modifier: target,
+        values: [],
+        chain: { type: target, criteria: [inner] },
+      };
+    }
+    const colon = name.indexOf(':');
+    const code = colon < 0 ? name : name.slice(0, colon);
+    const modifier = colon < 0 ? undefined : name.slice(colon + 1);
+    const param = served.params.get(code);
+    if (!param) return `Unknown search parameter ${name} for ${type}`;
+    return parseCriterion(param, modifier, value, isResourceType);
+  }
+
+  /** Why a chain from a type to another cannot be searched; undefined when it can */
+  private _chainable(
+    from: string,
+    to: string,
+    depth: number,
+  ): string | undefined {
+    if (depth >= MAX_CHAIN) return `a chain has ${MAX_CHAIN} links at most`;
+    const source = this._served.get(from)!;
+    if (!source.caps.chains)
+      return `the store of ${from} does not answer chained parameters`;
+    const target = this._served.get(to);
+    if (!target) return `${to} is not served`;
+    if (target.store !== source.store)
+      return `${to} is not in the store of ${from}`;
+    if (!target.caps.interactions.includes('search'))
+      return `${to} cannot be searched`;
+  }
+
+  /**
+   * Authorizes the types chains go to, as searches (403 when one is not
+   * allowed), and adds the authorizer's criteria for them to their chains:
+   * a chain finds nothing the caller could not find by searching
+   */
+  private async _authorizeChains(
+    ctx: Exchange,
+    criteria: readonly SearchCriterion[],
+  ): Promise<void> {
+    for (const c of criteria) {
+      const chain = c.chain ?? c.has;
+      if (!chain) continue;
+      await this._authorizeChains(ctx, chain.criteria);
+      const d = await this._authorize(ctx, 'search', chain.type);
+      if (d?.criteria)
+        chain.criteria.push(
+          ...this._query(
+            new URLSearchParams(d.criteria),
+            chain.type,
+            this._served.get(chain.type)!,
+            ctx.baseUrl,
+            true,
+          ).query.criteria,
+        );
+    }
   }
 
   /**
@@ -1331,6 +1671,7 @@ export class FhirServer {
         'not-supported',
       );
     const { query } = this._query(params, type, served, ctx.baseUrl, true);
+    await this._authorizeChains(ctx, query.criteria);
     query.count = 2;
     query.offset = 0;
     const page = await served.store.search(type, query, ctx.context);
@@ -1366,6 +1707,23 @@ export class FhirServer {
       .filter((c): c is string => !!c);
     e.headers = { 'WWW-Authenticate': challenges.join(', ') || 'Bearer' };
     throw e;
+  }
+
+  /** The authorizer's decision, allowed or not; allowed without one */
+  private async _decision(
+    ctx: Exchange,
+    interaction: FhirInteraction,
+    type?: string,
+    id?: string,
+  ): Promise<FhirAccessDecision> {
+    const authorizer = this.options.security?.authorizer;
+    if (!authorizer) return { allowed: true };
+    return authorizer.authorize({
+      principal: ctx.context.principal,
+      interaction,
+      type,
+      id,
+    });
   }
 
   /** The authorizer's decision (403 when not allowed); undefined without one */
@@ -1662,6 +2020,18 @@ export class FhirServer {
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */
 /* ------------------------------------------------------------------ */
+
+/** An _include or _revinclude */
+interface IncludeSpec {
+  rev: boolean;
+  iterate: boolean;
+  /** The type that refers: of the matches for _include, of the included for _revinclude */
+  source: string;
+  /** Its reference parameter */
+  param: FhirSearchParameter;
+  /** The type referred to, when named */
+  target?: string;
+}
 
 interface Exchange {
   request: Request;

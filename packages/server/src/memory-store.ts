@@ -9,7 +9,7 @@ import type {
   StoredVersion,
   StorePage,
 } from './fhir-store.js';
-import type { SearchQuery } from './search-query.js';
+import type { SearchLookup, SearchQuery } from './search-query.js';
 
 /** A version as the memory store keeps it: the resource as JSON text */
 interface Version {
@@ -34,6 +34,7 @@ const CAPABILITIES: StoreCapabilities = {
   versions: 'all',
   updateCreate: true,
   acceptsIds: true,
+  chains: true,
 };
 
 /**
@@ -228,7 +229,7 @@ export class MemoryStore implements FhirStore {
       const v = versions.at(-1)!;
       if (v.type !== type || v.text === undefined) continue;
       const s = stored(v);
-      if (query.matches(s.resource!)) matches.push(s);
+      if (query.matches(s.resource!, this._lookup)) matches.push(s);
     }
     if (query.sort.length)
       matches.sort((a, b) => query.compare(a.resource!, b.resource!));
@@ -237,6 +238,17 @@ export class MemoryStore implements FhirStore {
       total: matches.length,
     };
   }
+
+  /** The current resources, for chained criteria */
+  private readonly _lookup: SearchLookup = {
+    read: (type, id) => this._read(type, id)?.resource,
+    all: function* (this: MemoryStore, type: string) {
+      for (const versions of this._byKey.values()) {
+        const v = versions.at(-1)!;
+        if (v.type === type && v.text !== undefined) yield stored(v).resource!;
+      }
+    }.bind(this) as SearchLookup['all'],
+  };
 
   private _versions(type: string, id: string): Version[] | undefined {
     return this._byKey.get(`${type}/${id}`);

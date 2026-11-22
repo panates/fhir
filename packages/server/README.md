@@ -46,7 +46,9 @@ store has): new resources referred to by `urn:uuid:` and conditional references 
 
 Search (`GET [type]?...`, `POST [type]/_search`) takes the token, string, date, reference,
 number, quantity and uri parameters of the version, with their modifiers and prefixes, sorts
-with `_sort` and pages its results. A store gets the criteria parsed and typed, to translate to
+with `_sort` and pages its results. `_include` and `_revinclude` (with `:iterate`) add the
+resources the matches refer to and those that refer to them; chained parameters
+(`subject:Patient.name`) and `_has` go to a store that declares `chains`. A store gets the criteria parsed and typed, to translate to
 its own query language; the memory store matches them by the parameters' FHIRPath expressions.
 
 ### A store of your own
