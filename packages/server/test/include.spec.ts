@@ -7,6 +7,7 @@ import {
   type FhirStore,
   FhirServer,
   MemoryStore,
+  RoutingStore,
 } from '../src/index.js';
 
 const fhir = new FhirContext(r4Model);
@@ -136,10 +137,23 @@ describe('FhirServer: chained search', () => {
     expect(await search('Observation?patient.name=ali', true)).toBe(
       '400 patient.name: the store of Observation does not answer chained parameters',
     );
-    // Patient in a store of its own: not in the store of Observation
-    const two = await serverOf({ stores: { Patient: new MemoryStore() } });
-    expect(await two.search('Observation?patient.name=ali', true)).toBe(
-      '400 patient.name: Patient is not in the store of Observation',
+    // Organization in a store of its own: chains stop at its store
+    const two = await serverOf({
+      store: new RoutingStore({
+        store: new MemoryStore(),
+        routes: { Organization: new MemoryStore() },
+      }),
+    });
+    expect(await two.ids('Observation?subject:Patient.name=ali')).toBe(
+      'ob1,ob2',
+    );
+    expect(
+      await two.search(
+        'Observation?subject:Patient.organization.name=acme',
+        true,
+      ),
+    ).toBe(
+      '400 subject:Patient.organization.name: the store of Patient does not answer chains to Organization',
     );
   });
 

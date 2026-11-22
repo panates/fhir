@@ -21,11 +21,12 @@ export interface StoreCapabilities {
   /** The parameters it can sort by */
   sort?: readonly string[];
   /**
-   * It answers chained criteria and reverse chains (`_has`) to the types it
-   * serves itself: SearchCriterion.chain and .has. Without it, they are
+   * It answers chained criteria and reverse chains (`_has`):
+   * SearchCriterion.chain and .has. True: to every type it serves; a
+   * function: to the types it returns true for. Without it, they are
    * unknown parameters for its types.
    */
-  chains?: boolean;
+  chains?: boolean | ((target: string) => boolean);
   /**
    * create() keeps the id of the resource it is given, when it has one: the
    * server gives ids itself to the new resources of a transaction, so that
@@ -67,9 +68,9 @@ export interface StorePage<T> {
 }
 
 /**
- * Where a server keeps the resources of a type, or reads them from: the
- * in-memory store, a FHIR database, or a facade over a database of another
- * shape. Resources come and go in their JSON form; the server checks them
+ * Where a server keeps its resources, or reads them from: the in-memory
+ * store, a FHIR database, or a facade over a database of another shape
+ * (RoutingStore sends each type to a store of its own). Resources come and go in their JSON form; the server checks them
  * against the model before a write and after a read. A method the store does
  * not have, or an interaction it does not declare, answers 405.
  *
@@ -146,8 +147,7 @@ export interface FhirStore {
    * resolves and undone when it throws: what the work reads sees its own
    * writes, and nothing else sees them before the end. The view has the
    * methods of the store, except this one. A SQL store does it with BEGIN,
-   * COMMIT and ROLLBACK. Without it, the server takes no transaction for
-   * the store's types.
+   * COMMIT and ROLLBACK. Without it, the server takes no transaction.
    */
   transaction?<T>(
     work: (tx: FhirStore) => Promise<T>,
