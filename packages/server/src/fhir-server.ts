@@ -1,7 +1,9 @@
 import {
   type FhirContext,
   type FhirSearchParameter,
+  getDecimalText,
   parseFhirJson,
+  rawDecimal,
 } from '@fhirjs/core';
 import { FhirServerError } from './fhir-server-error.js';
 import type {
@@ -52,6 +54,8 @@ export interface FhirServerOptions {
   defaultCount?: number;
   /** The most entries a page has, whatever _count asks (default 500) */
   maxCount?: number;
+  /** The most entries a batch Bundle may have (default 100) */
+  maxBundleEntries?: number;
   /** The software name in the CapabilityStatement */
   name?: string;
   /**
@@ -216,7 +220,6 @@ export class FhirServer {
       context: { request },
     };
 
-    if (!seg.length) throw notAllowed(method, 'the server base');
     if (seg[0] === 'metadata' && seg.length === 1) {
       if (method !== 'GET') throw notAllowed(method, 'metadata');
       return jsonResponse(
@@ -242,6 +245,23 @@ export class FhirServer {
     }
     // everything else needs a caller, when the server has security
     ctx.context.principal = await this._authenticate(ctx);
+    if (!seg.length) {
+      if (method !== 'POST') throw notAllowed(method, 'the server base');
+      return this._bundle(ctx);
+    }
+    return this._dispatch(ctx, seg, path);
+  }
+
+  /**
+   * An interaction on a path under the base, for a caller already
+   * authenticated: a request, or an entry of a batch
+   */
+  private async _dispatch(
+    ctx: Exchange,
+    seg: string[],
+    path: string,
+  ): Promise<Response> {
+    const method = ctx.method;
     if (seg[0] === '_history' && seg.length === 1) {
       if (method !== 'GET') throw notAllowed(method, '_history');
       return this._history(ctx, this._systemStore(), undefined, undefined);
@@ -328,6 +348,164 @@ export class FhirServer {
       `${path} is not a FHIR interaction`,
       'not-found',
     );
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Batch                                                            */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * POST [base] with a batch Bundle: each entry an interaction of its own,
+   * authorized as such, in the order given; one that fails does not stop
+   * the others. The answer is a batch-response Bundle, an entry per entry.
+   */
+  private async _bundle(ctx: Exchange): Promise<Response> {
+    const mediaType = mediaTypeOf(ctx.request.headers.get('Content-Type'));
+    if (!mediaType || !JSON_TYPES.has(mediaType))
+      throw new FhirServerError(
+        415,
+        `A Bundle is sent as ${FHIR_JSON}, not ${mediaType || 'no content type'}`,
+        'not-supported',
+      );
+    let bundle: any;
+    try {
+      bundle = parseFhirJson(await ctx.request.text());
+    } catch {
+      throw new FhirServerError(400, 'The body is not JSON', 'structure');
+    }
+    if (bundle?.resourceType !== 'Bundle')
+      throw new FhirServerError(400, 'POST [base] takes a Bundle', 'invalid');
+    if (bundle.type === 'transaction')
+      throw new FhirServerError(
+        400,
+        'Transactions are not supported yet; send a batch',
+        'not-supported',
+      );
+    if (bundle.type !== 'batch')
+      throw new FhirServerError(
+        400,
+        `POST [base] takes a batch Bundle, not a ${bundle.type ?? 'Bundle without type'}`,
+        'invalid',
+      );
+    const entries: any[] = Array.isArray(bundle.entry) ? bundle.entry : [];
+    const max = this.options.maxBundleEntries ?? 100;
+    if (entries.length > max)
+      throw new FhirServerError(
+        413,
+        `The Bundle has ${entries.length} entries; this server takes ${max} at most`,
+        'too-costly',
+      );
+    const out: Record<string, any>[] = [];
+    for (const [i, entry] of entries.entries())
+      out.push(await this._entry(ctx, entry, i));
+    // the entries' resources keep the places of their decimals
+    return jsonResponse(
+      200,
+      stringifyJson({
+        resourceType: 'Bundle',
+        type: 'batch-response',
+        ...(out.length ? { entry: out } : {}),
+      }),
+    );
+  }
+
+  /** One entry of a batch, run as a request; its response entry */
+  private async _entry(
+    ctx: Exchange,
+    entry: any,
+    index: number,
+  ): Promise<Record<string, any>> {
+    let response: Response;
+    try {
+      const request = this._entryRequest(ctx, entry, index);
+      const url = new URL(request.url);
+      const path = url.pathname.slice(this.base.length);
+      const seg = path
+        .split('/')
+        .filter(Boolean)
+        .map(s => decodeURIComponent(s));
+      if (!seg.length)
+        throw new FhirServerError(
+          400,
+          `Entry ${index}: a batch cannot hold a request on the server base`,
+          'not-supported',
+        );
+      response = await this._dispatch(
+        {
+          request,
+          url,
+          method: request.method,
+          baseUrl: ctx.baseUrl,
+          // the caller of the Bundle, the request of the entry
+          context: { principal: ctx.context.principal, request },
+        },
+        seg,
+        path,
+      );
+    } catch (e) {
+      if (!(e instanceof FhirServerError)) {
+        this.options.onError?.(e, ctx.request);
+        e = new FhirServerError(
+          500,
+          'The server could not answer the request',
+          'exception',
+        );
+      }
+      response = outcomeResponse(e as FhirServerError);
+    }
+    return entryOf(response);
+  }
+
+  /** The request an entry stands for: its method, URL, conditions and resource */
+  private _entryRequest(ctx: Exchange, entry: any, index: number): Request {
+    const r = entry?.request;
+    const method = typeof r?.method === 'string' ? r.method.toUpperCase() : '';
+    if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method))
+      throw new FhirServerError(
+        400,
+        `Entry ${index}: request.method "${r?.method}" is not one`,
+        'required',
+      );
+    if (
+      typeof r.url !== 'string' ||
+      !r.url ||
+      /^[a-z][a-z0-9+.-]*:/i.test(r.url)
+    )
+      throw new FhirServerError(
+        400,
+        `Entry ${index}: request.url must be relative to the server base`,
+        'required',
+      );
+    const headers = new Headers({ Accept: FHIR_JSON });
+    const prefer = ctx.request.headers.get('Prefer');
+    if (prefer) headers.set('Prefer', prefer);
+    if (typeof r.ifMatch === 'string') headers.set('If-Match', r.ifMatch);
+    if (typeof r.ifNoneExist === 'string')
+      headers.set('If-None-Exist', r.ifNoneExist);
+    let body: string | undefined;
+    const resource = entry.resource;
+    if (method === 'PATCH') {
+      // a JSON Patch is sent as a Binary, as the specification has it
+      if (
+        resource?.resourceType !== 'Binary' ||
+        typeof resource.data !== 'string'
+      )
+        throw new FhirServerError(
+          400,
+          `Entry ${index}: a patch is a Binary with the JSON Patch as its data`,
+          'required',
+        );
+      headers.set('Content-Type', 'application/json-patch+json');
+      body = Buffer.from(resource.data, 'base64').toString('utf8');
+    } else if (resource !== undefined) {
+      headers.set('Content-Type', FHIR_JSON);
+      body = stringifyJson(resource);
+    }
+    return new Request(`${ctx.baseUrl}/${r.url.replace(/^\/+/, '')}`, {
+      method,
+      headers,
+      body: method === 'GET' || method === 'HEAD' ? undefined : body,
+    });
   }
 
   /* ---------------------------------------------------------------- */
@@ -1269,9 +1447,10 @@ export class FhirServer {
         ];
     }
     rest.resource = resource;
+    rest.interaction = [{ code: 'batch' }];
     try {
       if (this._systemStore().caps.interactions.includes('history'))
-        rest.interaction = [{ code: 'history-system' }];
+        rest.interaction.push({ code: 'history-system' });
     } catch {
       /* types in different stores: no system history */
     }
@@ -1447,4 +1626,55 @@ function jsonResponse(
 
 function outcomeResponse(e: FhirServerError): Response {
   return jsonResponse(e.status, JSON.stringify(e.outcome()), e.headers);
+}
+
+const STATUS_TEXT: Record<number, string> = {
+  200: 'OK',
+  201: 'Created',
+  204: 'No Content',
+  304: 'Not Modified',
+  400: 'Bad Request',
+  401: 'Unauthorized',
+  403: 'Forbidden',
+  404: 'Not Found',
+  405: 'Method Not Allowed',
+  406: 'Not Acceptable',
+  409: 'Conflict',
+  410: 'Gone',
+  412: 'Precondition Failed',
+  413: 'Content Too Large',
+  415: 'Unsupported Media Type',
+  422: 'Unprocessable Entity',
+  500: 'Internal Server Error',
+};
+
+/** The response entry of a batch: status, headers, and the resource or the outcome */
+async function entryOf(response: Response): Promise<Record<string, any>> {
+  const r: Record<string, any> = {
+    status: `${response.status} ${STATUS_TEXT[response.status] ?? ''}`.trim(),
+  };
+  const location = response.headers.get('Location');
+  if (location) r.location = location;
+  const etag = response.headers.get('ETag');
+  if (etag) r.etag = etag;
+  const text = await response.text();
+  const json = text ? parseFhirJson(text) : undefined;
+  // the resource's own time, to the millisecond; the header's is to the second
+  const modified = response.headers.get('Last-Modified');
+  const updated = json?.meta?.lastUpdated;
+  if (typeof updated === 'string' && response.status < 400)
+    r.lastModified = updated;
+  else if (modified) r.lastModified = new Date(modified).toISOString();
+  const entry: Record<string, any> = {};
+  if (json && response.status >= 400) r.outcome = json;
+  else if (json) entry.resource = json;
+  entry.response = r;
+  return entry;
+}
+
+/** JSON text of a parsed FHIR JSON value, its decimals as they were written */
+function stringifyJson(value: unknown): string {
+  return JSON.stringify(value, function (this: any, key, v) {
+    return typeof v === 'number' ? rawDecimal(v, getDecimalText(this, key)) : v;
+  });
 }

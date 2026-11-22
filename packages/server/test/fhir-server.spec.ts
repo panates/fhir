@@ -367,7 +367,10 @@ describe('FhirServer over a MemoryStore', () => {
       'history-type',
       'search-type',
     ]);
-    expect(cs.rest[0].interaction).toEqual([{ code: 'history-system' }]);
+    expect(cs.rest[0].interaction).toEqual([
+      { code: 'batch' },
+      { code: 'history-system' },
+    ]);
     expect(cs.rest[0].resource).toHaveLength(r4Model.resourceTypes().length);
     expect(cs.implementation.url).toBe(s.base);
     expect(fhir.validate(cs).valid).toBe(true);
@@ -533,7 +536,7 @@ describe('FhirServer with a store per type: a facade over an existing database',
       type: 'Observation',
       versioning: 'versioned-update',
     });
-    expect(cs.rest[0].interaction).toBeUndefined();
+    expect(cs.rest[0].interaction).toEqual([{ code: 'batch' }]);
   });
 
   it('answers 500 when the store gives what the model cannot read, and tells onError nothing else', async () => {
