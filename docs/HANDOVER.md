@@ -11,7 +11,7 @@ say: how to work in the repository, what is open, and what to watch for.
   and [panates/fhir#2](https://github.com/panates/fhir/pull/2) (CI and the repository
   standards) are merged into `dev`. `dev` did not exist before this work and was made from
   `main`.
-- 298 tests pass (`pnpm test`); type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
+- 304 tests pass (`pnpm test`); type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
 - CI: `.github/workflows/test.yml` runs on pull requests into `dev` and on pushes to `dev`. It
   builds, checks the types of the tests, fetches the HL7 packages (cached, keyed by the hash of
   `support/fetch-packages.mts`; a pull request restores the cache `dev`'s runs save), checks that
@@ -114,7 +114,7 @@ All are recorded in section 13 of the design document. In short:
    design is complete. Next: authentication and authorization, designed in
    [`decisions/server-auth.md`](decisions/server-auth.md). Built: `@fhirjs/smart`, and the
    server's authenticators (JWT, introspection, `checked()`), the authorizer interface, and
-   `SmartAuthorizer` with the compartments. Next: batch, then transaction, as designed in
+   `SmartAuthorizer` with the compartments. Batch is built. Next: transaction, as designed in
    "Batch and transaction" of [`decisions/server.md`](decisions/server.md); then `_include` and
    chained search.
 2. The repository standards that still fail (`repo-check`) are GitHub settings only, the user's

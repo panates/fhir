@@ -412,6 +412,36 @@ user; the rest is the proposal they lead to, open to change until it is built.
 A Bundle of type `history` or `message` as input (refused, 400), `_include` and chained search
 (the next step), and transactions across stores.
 
+## Built: batch (2026-11-22)
+
+`POST [base]` with a `batch` Bundle, as designed above. Code: `_bundle()`, `_entry()` and
+`_entryRequest()` in `fhir-server.ts`; the routing is split in two, `_route()` (the base path, the
+format, the public endpoints, authentication) and `_dispatch()` (the interaction), so that each
+entry runs through `_dispatch()` with the caller of the Bundle.
+
+- Each entry becomes a request: `request.method`, `request.url` (relative to the base; an
+  absolute URL, or one on the base itself, is refused for that entry), `ifMatch` and
+  `ifNoneExist` as headers, `Prefer` of the Bundle, the resource as the body with its decimals as
+  written. A `PATCH` entry is a Binary whose `data` is the JSON Patch.
+- The response entry has `status` (`201 Created`), `location`, `etag`, `lastModified` (the
+  resource's `meta.lastUpdated`, to the millisecond; the header's time otherwise), and the
+  resource, or `outcome` for an entry that failed. An entry the server cannot read answers 400 in
+  its place, and the others go on.
+- `maxBundleEntries` (default 100): more answers 413. A `transaction` answers 400 until it is
+  built; another type of Bundle, 400.
+- The `CapabilityStatement` lists `batch`.
+
+Found while testing: the response Bundle, written with `JSON.stringify`, dropped the places of the
+entries' decimals (`1.50` came back `1.5`); it is written as the entries are read now, keeping
+them.
+
+Tests: `packages/server/test/batch.spec.ts`, 6: an entry of each interaction in one batch (a
+failing one among them), `Prefer`, decimals, entries the server cannot read, Bundles it refuses,
+the client's `batch()`, and a Bundle authenticated once with entries authorized one by one.
+Control runs: the Bundle written without the decimals' texts, a failing entry stopping the
+batch, entries run without the caller, no limit on entries, and `Prefer` not passed on, tests
+fail each time. 298 tests before, 304 after.
+
 ## Not in the first version
 
 Batch and transaction, `_include` and `_revinclude`, chained and reverse-chained search (`_has`),
