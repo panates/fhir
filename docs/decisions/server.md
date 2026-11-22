@@ -47,10 +47,11 @@ const server = new FhirServer({
     Encounter: hbysEncounters,
   },
   resources: ['Patient', 'Encounter', 'Questionnaire'], // the types it serves; all when not given
+  base: '/fhir',                         // the path it answers under
   interceptors: [],                      // (request, next) => Promise<Response>, as in the client
 });
 
-http.createServer(nodeListener(server, { base: '/fhir' })).listen(8080);
+http.createServer(nodeListener(server)).listen(8080);
 // or: await server.handle(new Request('http://localhost/fhir/Patient/1'))
 ```
 
@@ -194,6 +195,40 @@ parameters, versioning; then the operations. Nothing in it is written by hand.
   can then be replaced by this one.
 - Search is tested against the R4 examples (`hl7.fhir.r4.examples`): each parameter type,
   modifier and prefix, with the expected matches.
+
+## Built: the package, the stores, read and write (2026-11-22)
+
+`packages/server`: `FhirServer`, `FhirStore` with `StoreCapabilities`, `MemoryStore`,
+`nodeListener()`, `FhirServerError`. It answers `metadata`, `read`, `vread`, `create`, `update`
+(and update as create), `delete`, and `history` of an instance, a type and the server. Search,
+conditional interactions, JSON Patch and `$validate` are the next steps.
+
+Where it differs from the proposal above, and why:
+
+- **`base` is an option of the server**, not of `nodeListener()`: the server writes its base URL
+  into `Location`, `fullUrl` and links, wherever it runs. `nodeListener(server)` takes nothing
+  else; under Express it reads `originalUrl`, so the mount path is kept.
+- **Stores keep JSON.** A store gets the resource in its JSON form, after the server has checked
+  it, and gives back JSON (or a plain object a facade builds). The server reads what a store gives
+  through the model before it answers: a facade's mapping error is a 500 that names the resource,
+  not a wrong answer. Decimals keep their places through `MemoryStore`, which keeps JSON text
+  (`1.50` stays `1.50`).
+- **`create` ignores the id of the body**, and `update` refuses a body without an id or with
+  another one (400), as the specification says.
+- **History pages** carry their place as `_offset` in the `next` and `previous` links, with
+  `_count` (default 50, at most 500) and `_since`.
+- **History of the server** is answered when every type is in one store; with stores per type it
+  answers 405, and the `CapabilityStatement` leaves out `history-system`.
+- **`delete`** answers 204, also for a resource that is not there or is already deleted.
+- **An error the server did not expect** (a store's connection refused) answers 500 without its
+  message, which goes to `onError`.
+
+Tests: `packages/server/test/fhir-server.spec.ts`, 21, over `node:http` with `@fhirjs/client` and
+plain `fetch`: every interaction above, the statuses of what is refused (400, 404, 405, 406, 410,
+412, 415, 422), a facade over a table of another shape (`HbysPatients`: read and update, no
+versions), interceptors. The `CapabilityStatement` and the history `Bundle` pass `validate()`.
+Control runs: without the If-Match check, without validation on write, with an ETag for a store
+without versions, and without the 405 check, a test fails each time. 219 tests before, 240 after.
 
 ## Not in the first version
 

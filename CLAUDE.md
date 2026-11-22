@@ -16,6 +16,7 @@ the work and what is open are in [`docs/HANDOVER.md`](docs/HANDOVER.md).
 | `packages/fhirpath` | `@fhirjs/fhirpath` | FHIRPath: lexer, Pratt parser, evaluator, `check()`. No dependency |
 | `packages/r4`, `r4b`, `r5` | `@fhirjs/r4`, `@fhirjs/r4b`, `@fhirjs/r5` | Generated classes of FHIR 4.0.1, 4.3.0 and 5.0.0 |
 | `packages/client` | `@fhirjs/client` | REST client, SMART on FHIR |
+| `packages/server` | `@fhirjs/server` | REST server: a fetch-style handler over stores per resource type ([design](docs/decisions/server.md)) |
 | `support/` | | `build-models.mts` (the generator), `fetch-packages.mts`, benchmarks |
 | `examples/` | | A profile example (`pnpm examples`) |
 
@@ -39,7 +40,7 @@ a feature branch: open a pull request to get a run.
 ## Rules and traps
 
 - **Run `pnpm fetch-packages` before you measure.** Without it the tests that need the HL7
-  packages are skipped, and the test count is not the real one (219 with them).
+  packages are skipped, and the test count is not the real one (240 with them).
 - **Tag a slow test `#slow`** at the end of its title: one that runs over every example of a
   version or takes about a second or more. CI runs the tagged tests in a second job, in parallel
   and without coverage (`mocha --grep '#slow'`), and the others with `--invert`. Ten are tagged;
