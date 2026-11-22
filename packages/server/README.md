@@ -88,7 +88,7 @@ by an authorizer. Both are interfaces: write your own, or wrap one (`checked()`)
 such as a session kept in Redis.
 
 ```ts
-import { checked, FhirServerError, JwtAuthenticator } from '@fhirjs/server';
+import { checked, FhirServerError, JwtAuthenticator, SmartAuthorizer } from '@fhirjs/server';
 
 const jwt = new JwtAuthenticator({ issuer: 'https://auth.example.org/realms/hbys' });
 const users = checked(jwt, async principal => {
@@ -99,7 +99,7 @@ const users = checked(jwt, async principal => {
 new FhirServer({
   fhir,
   store,
-  security: { authenticators: [users], authorizer: myAuthorizer },
+  security: { authenticators: [users], authorizer: new SmartAuthorizer({ fhir }) },
 });
 ```
 
@@ -107,6 +107,11 @@ Without a token the answer is 401; a token refused answers 401 with `invalid_tok
 authorizer may refuse an interaction (403), restrict a search with criteria, and decide on each
 resource read or written (404 for one the caller may not see). Stores get the caller as the last
 argument of each method.
+
+`SmartAuthorizer` reads SMART scopes, v1 and v2: `system/` scopes grant what they name,
+`patient/` scopes keep to the patient's compartment, and `user/` scopes ask rules of your own
+(`new SmartAuthorizer({ fhir, user: myRules })`). A v2 scope's query (`?category=laboratory`)
+restricts it further.
 
 ## Documentation
 
