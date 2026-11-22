@@ -1,5 +1,5 @@
 {
-  "references": [{ "path": "./packages/fhirpath" }, { "path": "./packages/core" }, { "path": "./packages/r4" }, { "path": "./packages/r4b" }, { "path": "./packages/r5" }, { "path": "./packages/client" }],
+  "references": [{ "path": "./packages/fhirpath" }, { "path": "./packages/core" }, { "path": "./packages/r4" }, { "path": "./packages/r4b" }, { "path": "./packages/r5" }, { "path": "./packages/client" }, { "path": "./packages/server" }],
   "files": [],
   "compilerOptions": { "noEmit": true }
 }

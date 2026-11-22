@@ -19,6 +19,7 @@ with a few more decorators. The packages are not published to npm yet.
 | [`@fhirjs/r4b`](packages/r4b) | FHIR R4B (4.3.0) resources and data types |
 | [`@fhirjs/r5`](packages/r5) | FHIR R5 (5.0.0) resources and data types |
 | [`@fhirjs/client`](packages/client) | A REST client with search paging, conditional interactions and SMART on FHIR |
+| [`@fhirjs/server`](packages/server) | A REST server over stores of your own: in memory, or a facade over an existing database |
 
 ## Quick start
 

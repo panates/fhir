@@ -184,6 +184,9 @@ importers:
       '@fhirjs/r5':
         specifier: workspace:*
         version: link:packages/r5
+      '@fhirjs/server':
+        specifier: workspace:*
+        version: link:packages/server
       '@panates/tsconfig':
         specifier: ^2.1.8
         version: 2.1.8
@@ -273,6 +276,15 @@ importers:
         version: 2.9.1
 
   packages/r5:
+    dependencies:
+      '@fhirjs/core':
+        specifier: workspace:*
+        version: link:../core
+      tslib:
+        specifier: ^2.9.1
+        version: 2.9.1
+
+  packages/server:
     dependencies:
       '@fhirjs/core':
         specifier: workspace:*
