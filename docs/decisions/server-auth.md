@@ -195,3 +195,30 @@ new FhirServer({
 - The `CapabilityStatement` gets `rest.security`: `cors`, the SMART service, and the OAuth
   endpoints as an extension when `smart` is given.
 
+
+## Built: `@fhirjs/smart` (2026-11-22)
+
+`packages/smart`, no dependency, Web Crypto:
+
+- `verifyJwt(token, { keys, issuer, audience?, algorithms?, clockSkew?, requireIat?, name? })`:
+  the algorithm from a list (RS256, RS384, ES256, ES384, PS256 by default; RS512 and PS384 when
+  asked; never `none` or HMAC), the issuer (one of several, if given), the key by `kid` and `alg`
+  (never one for encryption), the signature, the audience, `exp`, `nbf`, and `iat` when asked. A
+  `JwtError` says why, with a `code` (`algorithm`, `issuer`, `key`, `signature`, `audience`,
+  `expired`, `not-yet-valid`, `malformed`); `name` puts the token's name in the message.
+- `JwksClient({ issuer | jwksUri, cacheTtl?, minRefetchInterval?, fetch? })`: finds the JWK Set
+  by the issuer's OpenID configuration (which must name the same issuer) or by its URL, https only
+  but for this machine; keeps it an hour; reads it again for a `kid` it does not have, at most
+  every 30 s by default; one read for concurrent requests.
+- `parseScope()`, `parseScopes()`, `grantingScopes()`: scopes on resources, v1 read as v2
+  (`read` as `rs`, `write` as `cud`, `*` as `cruds`), v2's letters in the order c, r, u, d, s,
+  v2's restriction by query kept in `query`. Other scopes (`openid`, `launch/patient`) and scopes
+  not well formed are left out.
+- **The client uses it:** `verifyIdToken()` keeps its options and messages and checks `azp` and
+  the nonce itself; its keys are read again at once for an unknown `kid`
+  (`minRefetchInterval: 0`), as before. The client's tests pass unchanged.
+
+Tests: `packages/smart/test/smart.spec.ts`, 8, with keys made by Web Crypto and an issuer on
+127.0.0.1 that counts the reads of its JWK Set. Control runs: without the signature check, without
+the audience check, without the least time between reads, with concurrent reads not shared, and
+without the order of v2 letters, a test fails each time. 271 tests before, 279 after.

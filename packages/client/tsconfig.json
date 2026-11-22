@@ -1,6 +1,6 @@
 {
   "extends": "../../tsconfig-base.json",
   "include": ["src"],
-  "references": [{ "path": "../core" }],
+  "references": [{ "path": "../core" }, { "path": "../smart" }],
   "compilerOptions": { "rootDir": "src", "outDir": "./build", "noEmit": false }
 }

@@ -1,0 +1,21 @@
+{
+  "name": "@fhirjs/smart",
+  "description": "SMART on FHIR building blocks: JWT verification with JWK Sets, and SMART scopes",
+  "version": "0.0.0",
+  "private": true,
+  "license": "BSD-3-Clause",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "default": "./build/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=22.0"
+  },
+  "dependencies": {
+    "tslib": "^2.9.1"
+  }
+}
