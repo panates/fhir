@@ -81,6 +81,33 @@ new FhirServer({
 });
 ```
 
+### Authentication and authorization
+
+Who may call is decided by authenticators, asked in turn (a JWT, or an API key); what they may do
+by an authorizer. Both are interfaces: write your own, or wrap one (`checked()`) to check more,
+such as a session kept in Redis.
+
+```ts
+import { checked, FhirServerError, JwtAuthenticator } from '@fhirjs/server';
+
+const jwt = new JwtAuthenticator({ issuer: 'https://auth.example.org/realms/hbys' });
+const users = checked(jwt, async principal => {
+  if (!(await redis.exists(`session:${principal.claims.sid}`)))
+    throw new FhirServerError(401, 'The session has ended', 'login');
+});
+
+new FhirServer({
+  fhir,
+  store,
+  security: { authenticators: [users], authorizer: myAuthorizer },
+});
+```
+
+Without a token the answer is 401; a token refused answers 401 with `invalid_token`. The
+authorizer may refuse an interaction (403), restrict a search with criteria, and decide on each
+resource read or written (404 for one the caller may not see). Stores get the caller as the last
+argument of each method.
+
 ## Documentation
 
 [The design of the server](https://github.com/panates/fhir/blob/main/docs/decisions/server.md)

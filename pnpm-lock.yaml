@@ -298,6 +298,9 @@ importers:
       '@fhirjs/fhirpath':
         specifier: workspace:*
         version: link:../fhirpath
+      '@fhirjs/smart':
+        specifier: workspace:*
+        version: link:../smart
       tslib:
         specifier: ^2.9.1
         version: 2.9.1

@@ -1,4 +1,5 @@
 import type { SearchQuery } from './search-query.js';
+import type { FhirRequestContext } from './security.js';
 
 /** What a store can do for a resource type */
 export type FhirStoreInteraction =
@@ -62,19 +63,31 @@ export interface StorePage<T> {
  *
  * A store throws FhirServerError to refuse a request: 412 when `ifMatch` is
  * not the current version, 400 for what it cannot keep.
+ *
+ * Every method takes, last, the context of the request: the caller (when the
+ * server has security), for a store that applies rules of its own per row.
  */
 export interface FhirStore {
   /** What the store does for a type, asked once when the server starts; undefined: not this type */
   capabilities(type: string): StoreCapabilities | undefined;
   /** The current version; one with no `resource` when deleted; undefined when there never was one */
-  read?(type: string, id: string): Promise<StoredResource | undefined>;
+  read?(
+    type: string,
+    id: string,
+    context?: FhirRequestContext,
+  ): Promise<StoredResource | undefined>;
   vread?(
     type: string,
     id: string,
     versionId: string,
+    context?: FhirRequestContext,
   ): Promise<StoredResource | undefined>;
   /** Stores a new resource; the store gives it its id, versionId and lastUpdated */
-  create?(type: string, resource: Record<string, any>): Promise<StoredVersion>;
+  create?(
+    type: string,
+    resource: Record<string, any>,
+    context?: FhirRequestContext,
+  ): Promise<StoredVersion>;
   /**
    * Replaces a resource; `ifMatch` is the version the client read. When the
    * id does not exist, it creates it (method POST) if the store declares
@@ -85,18 +98,21 @@ export interface FhirStore {
     id: string,
     resource: Record<string, any>,
     ifMatch?: string,
+    context?: FhirRequestContext,
   ): Promise<StoredVersion | undefined>;
   /** Deletes a resource; undefined when there is none */
   delete?(
     type: string,
     id: string,
     ifMatch?: string,
+    context?: FhirRequestContext,
   ): Promise<StoredVersion | undefined>;
   /** Versions, newest first: of an instance, a type, or all (type undefined) */
   history?(
     type: string | undefined,
     id: string | undefined,
     query: HistoryQuery,
+    context?: FhirRequestContext,
   ): Promise<StorePage<StoredVersion>>;
   /**
    * The current resources of a type that match a search, a page of them
@@ -104,5 +120,9 @@ export interface FhirStore {
    * are parsed and typed; query.matches() checks one resource by FHIRPath,
    * for a store that has no query language of its own.
    */
-  search?(type: string, query: SearchQuery): Promise<StorePage<StoredResource>>;
+  search?(
+    type: string,
+    query: SearchQuery,
+    context?: FhirRequestContext,
+  ): Promise<StorePage<StoredResource>>;
 }

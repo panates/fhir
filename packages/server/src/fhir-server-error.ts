@@ -14,6 +14,8 @@ export interface FhirOutcomeIssue {
  */
 export class FhirServerError extends Error {
   readonly issues: FhirOutcomeIssue[];
+  /** Headers of the answer: WWW-Authenticate of a 401 */
+  headers?: Record<string, string>;
 
   constructor(
     readonly status: number,
