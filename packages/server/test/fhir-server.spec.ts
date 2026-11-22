@@ -318,7 +318,7 @@ describe('FhirServer over a MemoryStore', () => {
         put({ resourceType: 'Patient', id: '1' }, { 'If-Match': 'nonsense' }),
       ),
       await s.fetch('Patient/no-such-id'),
-      await s.fetch('Patient'),
+      await s.fetch('Patient', { method: 'DELETE' }),
     ];
     expect(await Promise.all(answers.map(outcome))).toEqual([
       '404 Resource type Nope is not served',
@@ -334,7 +334,7 @@ describe('FhirServer over a MemoryStore', () => {
       '406 _format=xml: this server answers JSON only',
       '400 If-Match: "nonsense" is not a version (W/"3")',
       '404 Patient/no-such-id is not known',
-      '405 GET is not supported on Patient',
+      '405 DELETE is not supported on Patient',
     ]);
     // outside the base path
     expect(
@@ -364,6 +364,7 @@ describe('FhirServer over a MemoryStore', () => {
       'delete',
       'history-instance',
       'history-type',
+      'search-type',
     ]);
     expect(cs.rest[0].interaction).toEqual([{ code: 'history-system' }]);
     expect(cs.rest[0].resource).toHaveLength(r4Model.resourceTypes().length);

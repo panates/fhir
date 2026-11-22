@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@fhirjs/core": "workspace:*",
+    "@fhirjs/fhirpath": "workspace:*",
     "tslib": "^2.9.1"
   }
 }

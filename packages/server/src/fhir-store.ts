@@ -1,3 +1,5 @@
+import type { SearchQuery } from './search-query.js';
+
 /** What a store can do for a resource type */
 export type FhirStoreInteraction =
   'read' | 'vread' | 'create' | 'update' | 'delete' | 'history' | 'search';
@@ -96,4 +98,11 @@ export interface FhirStore {
     id: string | undefined,
     query: HistoryQuery,
   ): Promise<StorePage<StoredVersion>>;
+  /**
+   * The current resources of a type that match a search, a page of them
+   * (query.offset, query.count), and how many match in all. The criteria
+   * are parsed and typed; query.matches() checks one resource by FHIRPath,
+   * for a store that has no query language of its own.
+   */
+  search?(type: string, query: SearchQuery): Promise<StorePage<StoredResource>>;
 }

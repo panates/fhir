@@ -230,6 +230,49 @@ versions), interceptors. The `CapabilityStatement` and the history `Bundle` pass
 Control runs: without the If-Match check, without validation on write, with an ETag for a store
 without versions, and without the 405 check, a test fails each time. 219 tests before, 240 after.
 
+## Built: search, first part (2026-11-22)
+
+`GET [type]?...` and `POST [type]/_search` (a form). Code: `search-query.ts` (the parsed query
+and its parsing), `search-match.ts` (`SearchMatcher`, by FHIRPath), `_search()` in
+`fhir-server.ts`, `MemoryStore.search()`.
+
+- **Types:** token, string, date and reference, with `_id` and `_lastUpdated`. A parameter of
+  another type (number, quantity, uri, composite, special) is treated as unknown for now.
+- **Modifiers:** string `:exact`, `:contains`, `:missing`; token `:not`, `:text`, `:missing`; date
+  and reference `:missing`; a resource type on a reference (`subject:Patient`). Any other
+  modifier is refused (400), as the specification asks.
+- **Values:** commas give OR (`\,` escapes one), a parameter given twice gives AND. Tokens as
+  `code`, `system|code`, `system|`, `|code`; on a CodeableConcept, a Coding, an Identifier, a
+  ContactPoint's value, or a code. Dates as ranges (`1980` is the year, `2020-03-04T10:00Z` the
+  minute; a time without a zone is UTC), with `eq ne lt gt le ge sa eb ap`, on dates, dateTimes,
+  instants, Periods and a Timing's events. `eq` means the target's range is within the
+  value's. References as `Type/id`, `id`, or an absolute URL; one under the server's base is a
+  local one.
+- **Strings** match by their start, without case or accents; `ı` is read as `i`, so `yilmaz`
+  finds `Yılmaz` and `istanbul` finds `İstanbul`. A HumanName is searched by its text, family,
+  given, prefix and suffix; an Address by its text, lines, city, district, state, postal code and
+  country.
+- **A store gets the criteria parsed and typed** (`SearchQuery`): each with its parameter's
+  definition, modifier and values (system and code, date range, reference type and id), and
+  `count` and `offset`. A store with a query language translates them; `query.matches()` checks
+  one resource by the parameters' FHIRPath expressions, which is how `MemoryStore` searches.
+  `resolve()` in an expression (`subject.where(resolve() is Patient)`) reads the type from the
+  reference's text.
+- **The parameters a type answers** are the store's `searchParams`, or every parameter with an
+  expression when it names none, of the types above. A name the type does not have is refused
+  when the server starts. The `CapabilityStatement` lists them.
+- **Unknown parameters** are left out, and out of the `self` link; with
+  `Prefer: handling=strict` they are refused (400).
+- **Paging** as for history: `_count` (default 50, at most 500), `_offset` in `next` and
+  `previous`. Results come in the store's order; `_sort` is the next step.
+
+Tests: `packages/server/test/search.spec.ts`, 12: each type with its modifiers and prefixes on
+three Patients and three Observations (Turkish names among them), paging, POST, unknown
+parameters, refused values, the `CapabilityStatement`, a store that answers one parameter and
+gets the parsed criteria, `dateRange()`. Control runs: without reading `ı` as `i`, with `eq` as
+overlap, without `resolve()`, with `|code` ignoring the system, and without `handling=strict`, a
+test fails each time. 240 tests before, 252 after.
+
 ## Not in the first version
 
 Batch and transaction, `_include` and `_revinclude`, chained and reverse-chained search (`_has`),

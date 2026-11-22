@@ -1,4 +1,8 @@
-import { type FhirContext, parseFhirJson } from '@fhirjs/core';
+import {
+  type FhirContext,
+  type FhirSearchParameter,
+  parseFhirJson,
+} from '@fhirjs/core';
 import { FhirServerError } from './fhir-server-error.js';
 import type {
   FhirStore,
@@ -7,6 +11,14 @@ import type {
   StoredResource,
   StoredVersion,
 } from './fhir-store.js';
+import { SearchMatcher } from './search-match.js';
+import {
+  parseCriterion,
+  RESULT_PARAMS,
+  SEARCH_TYPES,
+  type SearchCriterion,
+  type SearchQuery,
+} from './search-query.js';
 
 /** A step around each exchange: (request, next) => response, as in the client */
 export type FhirServerInterceptor = (
@@ -41,6 +53,8 @@ export interface FhirServerOptions {
 interface Served {
   store: FhirStore;
   caps: StoreCapabilities;
+  /** The search parameters the store answers and the server parses, by code */
+  params: Map<string, FhirSearchParameter>;
 }
 
 const FHIR_JSON = 'application/fhir+json';
@@ -61,8 +75,7 @@ const METHOD: Record<FhirStoreInteraction, keyof FhirStore | undefined> = {
   update: 'update',
   delete: 'delete',
   history: 'history',
-  // not served yet: the search of the server is the next step
-  search: undefined,
+  search: 'search',
 };
 
 /** CapabilityStatement interaction codes of a store's interactions */
@@ -73,7 +86,7 @@ const CAPABILITY_CODES: Record<FhirStoreInteraction, string[]> = {
   update: ['update'],
   delete: ['delete'],
   history: ['history-instance', 'history-type'],
-  search: [],
+  search: ['search-type'],
 };
 
 const STATUS_LINE: Record<StoredVersion['method'], string> = {
@@ -98,9 +111,11 @@ export class FhirServer {
   private readonly _served = new Map<string, Served>();
   private readonly _handle: (request: Request) => Promise<Response>;
   private readonly _date = new Date().toISOString();
+  private readonly _matcher: SearchMatcher;
 
   constructor(readonly options: FhirServerOptions) {
     this.fhir = options.fhir;
+    this._matcher = new SearchMatcher(this.fhir);
     this.base = (options.base ?? '').replace(/\/+$/, '');
     if (this.base && !this.base.startsWith('/'))
       throw new TypeError(`base must be a path: "${options.base}"`);
@@ -113,7 +128,12 @@ export class FhirServer {
         );
       const store = options.stores?.[type] ?? options.store;
       const caps = store?.capabilities(type);
-      if (caps && store) this._served.set(type, { store, caps });
+      if (caps && store)
+        this._served.set(type, {
+          store,
+          caps,
+          params: searchParams(model, type, caps),
+        });
       else if (options.resources)
         throw new TypeError(`No store serves ${type}`);
     }
@@ -209,7 +229,12 @@ export class FhirServer {
         'not-supported',
       );
     const [, id, op, vid] = seg;
-    if (id !== undefined && id !== '_history' && !ID.test(id))
+    if (
+      id !== undefined &&
+      id !== '_history' &&
+      id !== '_search' &&
+      !ID.test(id)
+    )
       throw new FhirServerError(400, `"${id}" is not a valid id`, 'value');
     if (vid !== undefined && !ID.test(vid))
       throw new FhirServerError(
@@ -221,8 +246,13 @@ export class FhirServer {
     switch (seg.length) {
       case 1:
         if (method === 'POST') return this._create(ctx, type, served);
+        if (method === 'GET') return this._search(ctx, type, served);
         throw notAllowed(method, type);
       case 2:
+        if (id === '_search') {
+          if (method !== 'POST') throw notAllowed(method, `${type}/_search`);
+          return this._search(ctx, type, served);
+        }
         if (id === '_history') {
           if (method !== 'GET') throw notAllowed(method, `${type}/_history`);
           return this._history(ctx, served, type, undefined);
@@ -439,6 +469,98 @@ export class FhirServer {
     return jsonResponse(200, JSON.stringify(bundle));
   }
 
+  /**
+   * GET [type]?params, POST [type]/_search: the matches, a page at a time,
+   * in a searchset Bundle. A parameter the server does not know, or the
+   * store does not answer, is left out (and out of the self link), or
+   * refused with Prefer: handling=strict.
+   */
+  private async _search(
+    ctx: Exchange,
+    type: string,
+    served: Served,
+  ): Promise<Response> {
+    const store = need(served, 'search', type);
+    const params = new URLSearchParams(ctx.url.search);
+    if (ctx.method === 'POST') {
+      const mediaType = mediaTypeOf(ctx.request.headers.get('Content-Type'));
+      if (mediaType !== 'application/x-www-form-urlencoded')
+        throw new FhirServerError(
+          415,
+          `_search takes a form (application/x-www-form-urlencoded), not ${mediaType || 'no content type'}`,
+          'not-supported',
+        );
+      for (const [k, v] of new URLSearchParams(await ctx.request.text()))
+        params.append(k, v);
+    }
+    const strict = /(?:^|[;,\s])handling=strict\b/.test(
+      ctx.request.headers.get('Prefer') ?? '',
+    );
+    const isResourceType = (name: string) =>
+      this.fhir.model.resourceTypes().includes(name);
+    const criteria: SearchCriterion[] = [];
+    const applied = new URLSearchParams();
+    for (const [name, value] of params) {
+      if (RESULT_PARAMS.has(name)) continue;
+      const colon = name.indexOf(':');
+      const code = colon < 0 ? name : name.slice(0, colon);
+      const modifier = colon < 0 ? undefined : name.slice(colon + 1);
+      const param = served.params.get(code);
+      if (!param || code.includes('.')) {
+        if (strict)
+          throw new FhirServerError(
+            400,
+            `Unknown search parameter ${name} for ${type}`,
+            'not-supported',
+          );
+        continue;
+      }
+      criteria.push(parseCriterion(param, modifier, value, isResourceType));
+      applied.append(name, value);
+    }
+    const count = Math.min(
+      intParam(params, '_count') ?? this.options.defaultCount ?? 50,
+      this.options.maxCount ?? 500,
+    );
+    const offset = intParam(params, '_offset') ?? 0;
+    const baseUrl = ctx.baseUrl;
+    const query: SearchQuery = {
+      type,
+      criteria,
+      count,
+      offset,
+      matches: resource => this._matcher.matches(resource, criteria, baseUrl),
+    };
+    const page = await store.search!(type, query);
+
+    const link = (rel: string, at: number) => {
+      const p = new URLSearchParams(applied);
+      p.set('_count', String(count));
+      if (at) p.set('_offset', String(at));
+      return { relation: rel, url: `${baseUrl}/${type}?${p}` };
+    };
+    const more =
+      page.total !== undefined
+        ? offset + count < page.total
+        : page.items.length === count;
+    const links = [link('self', offset)];
+    if (count && more) links.push(link('next', offset + count));
+    if (offset) links.push(link('previous', Math.max(0, offset - count)));
+    const bundle: Record<string, any> = {
+      resourceType: 'Bundle',
+      type: 'searchset',
+    };
+    if (page.total !== undefined) bundle.total = page.total;
+    bundle.link = links;
+    if (page.items.length)
+      bundle.entry = page.items.map(s => ({
+        fullUrl: `${baseUrl}/${s.type}/${s.id}`,
+        resource: this._json(s),
+        search: { mode: 'match' },
+      }));
+    return jsonResponse(200, JSON.stringify(bundle));
+  }
+
   /** The store of system history: the one store of every type served */
   private _systemStore(): Served {
     const stores = new Set([...this._served.values()].map(s => s.store));
@@ -523,21 +645,31 @@ export class FhirServer {
 
   /** The CapabilityStatement: what each type's store declares */
   capabilityStatement(baseUrl: string): Record<string, any> {
-    const resource = [...this._served].map(([type, { store, caps }]) => {
-      const codes = caps.interactions
-        .filter(i => METHOD[i] && typeof store[METHOD[i]!] === 'function')
-        .flatMap(i => CAPABILITY_CODES[i]);
-      const r: Record<string, any> = {
-        type,
-        interaction: codes.map(code => ({ code })),
-        versioning:
-          caps.versions === 'none' ? 'no-version' : 'versioned-update',
-        readHistory:
-          caps.versions === 'all' && caps.interactions.includes('vread'),
-        updateCreate: !!caps.updateCreate,
-      };
-      return r;
-    });
+    const resource = [...this._served].map(
+      ([type, { store, caps, params }]) => {
+        const interactions = caps.interactions.filter(
+          i => METHOD[i] && typeof store[METHOD[i]!] === 'function',
+        );
+        const r: Record<string, any> = {
+          type,
+          interaction: interactions
+            .flatMap(i => CAPABILITY_CODES[i])
+            .map(code => ({ code })),
+          versioning:
+            caps.versions === 'none' ? 'no-version' : 'versioned-update',
+          readHistory:
+            caps.versions === 'all' && caps.interactions.includes('vread'),
+          updateCreate: !!caps.updateCreate,
+        };
+        if (interactions.includes('search') && params.size)
+          r.searchParam = [...params.values()].map(p => ({
+            name: p.code,
+            definition: p.url,
+            type: p.type,
+          }));
+        return r;
+      },
+    );
     const rest: Record<string, any> = { mode: 'server', resource };
     try {
       if (this._systemStore().caps.interactions.includes('history'))
@@ -569,6 +701,31 @@ interface Exchange {
   method: string;
   /** The server's base URL: 'http://host/fhir' */
   baseUrl: string;
+}
+
+/**
+ * The search parameters of a type the server parses and the store answers:
+ * those the store names, or every one with an expression when it names none
+ */
+function searchParams(
+  model: FhirContext['model'],
+  type: string,
+  caps: StoreCapabilities,
+): Map<string, FhirSearchParameter> {
+  const out = new Map<string, FhirSearchParameter>();
+  if (!caps.interactions.includes('search')) return out;
+  const all = model.searchParameters(type);
+  for (const code of caps.searchParams ?? [])
+    if (!all.has(code))
+      throw new TypeError(
+        `The store of ${type} names a search parameter ${type} does not have: ${code}`,
+      );
+  for (const [code, p] of all) {
+    if (!SEARCH_TYPES.has(p.type)) continue;
+    if (caps.searchParams ? caps.searchParams.includes(code) : p.expression)
+      out.set(code, p);
+  }
+  return out;
 }
 
 /** The store, when it declares the interaction and has its method; 405 otherwise */

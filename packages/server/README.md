@@ -30,13 +30,20 @@ const server = new FhirServer({
 
 http.createServer(nodeListener(server)).listen(8080);
 // or, wherever Request and Response are spoken:
-const response = await server.handle(new Request('http://localhost/fhir/metadata'));
+const response = await server.handle(
+  new Request('http://localhost/fhir/metadata'),
+);
 ```
 
 It answers `metadata`, `read`, `vread`, `create`, `update` (and update as create), `delete`
 and `history` of an instance, a type and the server, with `ETag`, `If-Match`, `Location` and
-`Prefer: return=`. A resource that is not valid is refused with 422 and its issues. Search comes
-next.
+`Prefer: return=`. A resource that is not valid is refused with 422 and its issues.
+
+Search (`GET [type]?...`, `POST [type]/_search`) takes the token, string, date and reference
+parameters of the version, with their modifiers and prefixes, and pages its results. A store
+gets the criteria parsed and typed, to translate to its own query language; the memory store
+matches them by the parameters' FHIRPath expressions. Number, quantity and uri parameters and
+`_sort` come next.
 
 ### A store of your own
 
@@ -45,14 +52,31 @@ import type { FhirStore } from '@fhirjs/server';
 
 const patients: FhirStore = {
   // read only, and the table keeps no versions
-  capabilities: type => (type === 'Patient' ? { interactions: ['read'], versions: 'none' } : undefined),
+  capabilities: type =>
+    type === 'Patient'
+      ? { interactions: ['read'], versions: 'none' }
+      : undefined,
   async read(type, id) {
     const row = await db.findPatient(id);
-    return row && { type, id, resource: { resourceType: 'Patient', id, name: [{ family: row.surname }] } };
+    return (
+      row && {
+        type,
+        id,
+        resource: {
+          resourceType: 'Patient',
+          id,
+          name: [{ family: row.surname }],
+        },
+      }
+    );
   },
 };
 
-new FhirServer({ fhir, store: new MemoryStore(), stores: { Patient: patients } });
+new FhirServer({
+  fhir,
+  store: new MemoryStore(),
+  stores: { Patient: patients },
+});
 ```
 
 ## Documentation

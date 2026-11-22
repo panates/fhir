@@ -1,0 +1,267 @@
+import { type FhirContext, fhirPathModelOf } from '@fhirjs/core';
+import { FhirPath, type Item } from '@fhirjs/fhirpath';
+import { FhirServerError } from './fhir-server-error.js';
+import {
+  dateRange,
+  type SearchCriterion,
+  type SearchValue,
+} from './search-query.js';
+
+/**
+ * Matches resources against search criteria by the FHIRPath expressions of
+ * their parameters: what a store without a query language of its own (the
+ * memory store) searches with.
+ */
+export class SearchMatcher {
+  private readonly _fp: FhirPath;
+
+  constructor(fhir: FhirContext) {
+    this._fp = new FhirPath({
+      model: fhirPathModelOf(fhir.model),
+      // .where(resolve() is Patient): the type of a reference is in its text
+      resolve: ref => {
+        const m = /(?:^|\/)([A-Z][A-Za-z]+)\/[A-Za-z0-9\-.]{1,64}$/.exec(
+          ref.replace(/\/_history\/[^/]+$/, ''),
+        );
+        return m ? { resourceType: m[1] } : undefined;
+      },
+    });
+  }
+
+  /**
+   * Whether a resource matches every criterion. `baseUrl` is the server's:
+   * an absolute reference under it is a local one.
+   */
+  matches(
+    resource: Record<string, any>,
+    criteria: readonly SearchCriterion[],
+    baseUrl = '',
+  ): boolean {
+    return criteria.every(c => this._matches(resource, c, baseUrl));
+  }
+
+  private _matches(
+    resource: Record<string, any>,
+    c: SearchCriterion,
+    baseUrl: string,
+  ): boolean {
+    const items = this._values(resource, c);
+    if (c.missing !== undefined) return c.missing === !items.length;
+    const any = c.values.some(v =>
+      items.some(i => this._valueMatches(c, i, v, baseUrl)),
+    );
+    return c.modifier === 'not' ? !any : any;
+  }
+
+  /** The values of a parameter in a resource */
+  private _values(resource: Record<string, any>, c: SearchCriterion): Item[] {
+    const expression = c.param.expression;
+    if (!expression)
+      throw new FhirServerError(
+        400,
+        `${c.param.code} cannot be searched here`,
+        'not-supported',
+      );
+    try {
+      return this._fp.compile(expression).evaluateItems(resource);
+    } catch {
+      // data the expression cannot take (as() on several values): no values
+      return [];
+    }
+  }
+
+  private _valueMatches(
+    c: SearchCriterion,
+    item: Item,
+    v: SearchValue,
+    baseUrl: string,
+  ): boolean {
+    switch (c.param.type) {
+      case 'token':
+        return c.modifier === 'text' ? tokenText(item, v.raw) : token(item, v);
+      case 'string':
+        return strings(item).some(s => stringMatches(s, v.raw, c.modifier));
+      case 'date':
+        return dateRanges(item).some(([t1, t2]) => dateMatches(v, t1, t2));
+      case 'reference':
+        return this._reference(item, v, baseUrl);
+      default:
+        return false;
+    }
+  }
+
+  private _reference(item: Item, v: SearchValue, baseUrl: string): boolean {
+    const val: any = item.v;
+    let ref: string | undefined =
+      item.t === 'Reference'
+        ? val?.reference
+        : typeof val === 'string'
+          ? val
+          : undefined;
+    if (!ref) return false;
+    ref = ref.replace(/\/_history\/[^/]+$/, '');
+    if (v.url && ref === v.url) return true;
+    if (baseUrl && ref.startsWith(baseUrl + '/'))
+      ref = ref.slice(baseUrl.length + 1);
+    if (v.url && !(baseUrl && v.url.startsWith(baseUrl + '/'))) return false;
+    const m = /^([A-Z][A-Za-z]+)\/([A-Za-z0-9\-.]{1,64})$/.exec(ref);
+    if (!m) return false;
+    return m[2] === v.id && (!v.type || m[1] === v.type);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Tokens                                                             */
+/* ------------------------------------------------------------------ */
+
+function codeMatches(v: SearchValue, system: unknown, code: unknown): boolean {
+  if (v.code !== undefined && code !== v.code) return false;
+  if (v.system === undefined) return v.code !== undefined;
+  if (v.system === '') return system === undefined || system === null;
+  return system === v.system;
+}
+
+function token(item: Item, v: SearchValue): boolean {
+  const val: any = item.v;
+  switch (item.t) {
+    case 'CodeableConcept':
+      return (val?.coding ?? []).some((c: any) =>
+        codeMatches(v, c?.system, c?.code),
+      );
+    case 'Coding':
+      return codeMatches(v, val?.system, val?.code);
+    case 'Identifier':
+      return codeMatches(v, val?.system, val?.value);
+    case 'ContactPoint':
+      return (
+        codeMatches(v, undefined, val?.value) ||
+        (v.system !== undefined &&
+          v.system !== '' &&
+          codeMatches(v, val?.system, val?.value))
+      );
+  }
+  // a primitive: a code without a system
+  if (val === null || typeof val === 'object') return false;
+  return codeMatches(v, undefined, String(val));
+}
+
+/** :text: the text of a CodeableConcept, the display of a Coding */
+function tokenText(item: Item, text: string): boolean {
+  const val: any = item.v;
+  const texts: unknown[] =
+    item.t === 'CodeableConcept'
+      ? [val?.text, ...(val?.coding ?? []).map((c: any) => c?.display)]
+      : item.t === 'Coding'
+        ? [val?.display]
+        : item.t === 'Identifier'
+          ? [val?.type?.text]
+          : [];
+  return texts.some(
+    t => typeof t === 'string' && stringMatches(t, text, undefined),
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Strings                                                            */
+/* ------------------------------------------------------------------ */
+
+/** Case and accents removed; Turkish dotless ı read as i */
+export function normalize(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/ı/g, 'i');
+}
+
+function stringMatches(
+  s: string,
+  search: string,
+  modifier: string | undefined,
+): boolean {
+  if (modifier === 'exact') return s === search;
+  if (modifier === 'contains') return normalize(s).includes(normalize(search));
+  return normalize(s).startsWith(normalize(search));
+}
+
+/** The strings a value is searched by: a HumanName's parts, an Address's */
+function strings(item: Item): string[] {
+  const val: any = item.v;
+  const list = (...xs: unknown[]) =>
+    xs.flat().filter((x): x is string => typeof x === 'string');
+  switch (item.t) {
+    case 'HumanName':
+      return list(
+        val?.text,
+        val?.family,
+        val?.given ?? [],
+        val?.prefix ?? [],
+        val?.suffix ?? [],
+      );
+    case 'Address':
+      return list(
+        val?.text,
+        val?.line ?? [],
+        val?.city,
+        val?.district,
+        val?.state,
+        val?.postalCode,
+        val?.country,
+      );
+  }
+  return typeof val === 'string' ? [val] : [];
+}
+
+/* ------------------------------------------------------------------ */
+/* Dates                                                              */
+/* ------------------------------------------------------------------ */
+
+/** The ranges a value covers: a date, dateTime or instant; a Period; a Timing's events */
+function dateRanges(item: Item): [number, number][] {
+  const val: any = item.v;
+  const one = (x: unknown) =>
+    typeof x === 'string' ? dateRange(x) : undefined;
+  switch (item.t) {
+    case 'Period': {
+      const start = one(val?.start);
+      const end = one(val?.end);
+      if (!start && !end) return [];
+      return [[start ? start[0] : -Infinity, end ? end[1] : Infinity]];
+    }
+    case 'Timing':
+      return (val?.event ?? []).map(one).filter(Boolean) as [number, number][];
+  }
+  const r = one(val);
+  return r ? [r] : [];
+}
+
+/** A value's prefix against the range of a target [t1, t2) */
+function dateMatches(v: SearchValue, t1: number, t2: number): boolean {
+  const s1 = v.start!;
+  const s2 = v.end!;
+  const eq = t1 >= s1 && t2 <= s2;
+  switch (v.prefix ?? 'eq') {
+    case 'eq':
+      return eq;
+    case 'ne':
+      return !eq;
+    case 'gt':
+      return t2 > s2;
+    case 'lt':
+      return t1 < s1;
+    case 'ge':
+      return t2 > s2 || eq;
+    case 'le':
+      return t1 < s1 || eq;
+    case 'sa':
+      return t1 >= s2;
+    case 'eb':
+      return t2 <= s1;
+    case 'ap': {
+      // within 10% of the distance from now, as the specification suggests
+      const margin = Math.abs(Date.now() - s1) * 0.1;
+      return t1 < s2 + margin && t2 > s1 - margin;
+    }
+  }
+  return false;
+}
