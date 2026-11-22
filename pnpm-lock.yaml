@@ -289,6 +289,9 @@ importers:
       '@fhirjs/core':
         specifier: workspace:*
         version: link:../core
+      '@fhirjs/fhirpath':
+        specifier: workspace:*
+        version: link:../fhirpath
       tslib:
         specifier: ^2.9.1
         version: 2.9.1

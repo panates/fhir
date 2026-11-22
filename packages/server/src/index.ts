@@ -1,5 +1,7 @@
 export * from './fhir-server.js';
 export * from './fhir-server-error.js';
 export type * from './fhir-store.js';
+export * from './search-match.js';
+export * from './search-query.js';
 export * from './memory-store.js';
 export * from './node-listener.js';

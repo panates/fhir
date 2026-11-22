@@ -9,6 +9,7 @@ import type {
   StoredVersion,
   StorePage,
 } from './fhir-store.js';
+import type { SearchQuery } from './search-query.js';
 
 /** A version as the memory store keeps it: the resource as JSON text */
 interface Version {
@@ -21,7 +22,15 @@ interface Version {
 }
 
 const CAPABILITIES: StoreCapabilities = {
-  interactions: ['read', 'vread', 'create', 'update', 'delete', 'history'],
+  interactions: [
+    'read',
+    'vread',
+    'create',
+    'update',
+    'delete',
+    'history',
+    'search',
+  ],
   versions: 'all',
   updateCreate: true,
 };
@@ -112,6 +121,23 @@ export class MemoryStore implements FhirStore {
         .slice(query.offset, query.offset + query.count)
         .map(v => ({ ...stored(v), method: v.method })),
       total: newest.length,
+    };
+  }
+
+  async search(
+    type: string,
+    query: SearchQuery,
+  ): Promise<StorePage<StoredResource>> {
+    const matches: StoredResource[] = [];
+    for (const versions of this._byKey.values()) {
+      const v = versions.at(-1)!;
+      if (v.type !== type || v.text === undefined) continue;
+      const s = stored(v);
+      if (query.matches(s.resource!)) matches.push(s);
+    }
+    return {
+      items: matches.slice(query.offset, query.offset + query.count),
+      total: matches.length,
     };
   }
 
