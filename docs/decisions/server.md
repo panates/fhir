@@ -339,6 +339,79 @@ that drops the text of a decimal it writes, a `test` that always passes, a condi
 that takes the first of several, and `$validate` without the profile asked for, a test fails each
 time. 257 tests before, 271 after.
 
+## Batch and transaction (2026-11-22)
+
+`POST [base]` with a Bundle of type `batch` or `transaction`. The decisions were taken with the
+user; the rest is the proposal they lead to, open to change until it is built.
+
+| Question | Decision | Why |
+| -------- | -------- | --- |
+| Which first | Batch first, transaction after it | A batch needs nothing new of the stores: each entry is an interaction the server already has. |
+| How a transaction is atomic | Through an optional store interface, `transaction()`: the store gives a view whose writes are kept when the work ends and undone when it fails | Only the store can make writes atomic (a database's `BEGIN` / `COMMIT` / `ROLLBACK`). The server cannot undo what a store has written. |
+| Across stores | A transaction is answered only when every entry's type is in one store that has `transaction()`; otherwise it is refused (400), and the `CapabilityStatement` does not list it | With a type in an existing database and another in memory, nothing can make the two atomic together; a transaction that is atomic in part would be worse than none. |
+
+### Batch
+
+- **Each entry is a request of its own**, as if it had come alone: `request.method` and
+  `request.url` (relative to the base: `Patient/1`, `Patient?name=x`, `Patient/1/_history/2`),
+  the resource, and `ifMatch`, `ifNoneExist`, `ifNoneMatch` as its headers. Every interaction
+  of the server can be an entry: read, search, create, update, patch (a `Binary` with the JSON
+  Patch, as the specification has it), delete, conditional ones, `$validate`.
+- **The caller is authenticated once**, for the Bundle; each entry is authorized as its own
+  interaction (a 403 for one entry does not stop the others). The interceptors run around the
+  Bundle, not around each entry.
+- **Entries run in the order given**, one after the other; one that fails does not stop the
+  others.
+- **The answer is a `batch-response` Bundle**, 200, with an entry per entry in the same order:
+  `response.status` (`201 Created`), `location`, `etag`, `lastModified`, the resource as
+  `Prefer: return=` asks for the Bundle, and `response.outcome` (an OperationOutcome) for an
+  entry that failed.
+- **A limit** on the entries of a Bundle (`maxBundleEntries`, default 100): more is refused with
+  413, so that one request cannot hold the server.
+
+### Transaction
+
+- **The store interface:**
+
+  ```ts
+  interface FhirStore {
+    // ...
+    /**
+     * Runs `work` with a view of the store whose writes are kept when it resolves, and undone
+     * when it throws: what the work reads sees its own writes, and nothing else sees them first
+     */
+    transaction?<T>(work: (tx: FhirStore) => Promise<T>, context?: FhirRequestContext): Promise<T>;
+  }
+  ```
+
+  `MemoryStore` does it with an undo log; a SQL store with `BEGIN`, `COMMIT` and `ROLLBACK`.
+  The view has the same methods as the store.
+- **All or nothing:** an entry that fails ends the transaction. The answer is that entry's
+  status with its OperationOutcome (naming the entry), and nothing is written. Authorization
+  counts too: one entry the caller may not do refuses the whole transaction (403).
+- **The order of the specification**, whatever the order of the Bundle: deletes, then creates,
+  then updates and patches, then reads and searches, which see the transaction's writes.
+- **New resources and their references:** an entry to create has a placeholder `fullUrl`
+  (`urn:uuid:...`), and other entries refer to it by that placeholder. The server gives each such
+  resource its id before anything is written, and rewrites every reference to the placeholder
+  (`Patient/<id>`), so that resources can refer to each other in a cycle. The store then needs to
+  keep the id it is given: it declares `acceptsIds: true` in its capabilities (MemoryStore does);
+  a store that gives ids itself cannot take part in a transaction with placeholders.
+- **Conditional references** (`Patient?identifier=urn:oid:...|123` as a reference) are resolved
+  by a search before the writes: one match is the reference, none or more than one fails the
+  transaction (412).
+- **Conditional entries** (`ifNoneExist`, `PUT [type]?criteria`, conditional delete) search inside
+  the transaction.
+- **The answer is a `transaction-response` Bundle**, 200, with an entry per entry in the order of
+  the request.
+- The `CapabilityStatement` lists `batch` always, and `transaction` when every type served is in
+  one store with `transaction()`.
+
+### Not in this step
+
+A Bundle of type `history` or `message` as input (refused, 400), `_include` and chained search
+(the next step), and transactions across stores.
+
 ## Not in the first version
 
 Batch and transaction, `_include` and `_revinclude`, chained and reverse-chained search (`_has`),
