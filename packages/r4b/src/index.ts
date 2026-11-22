@@ -1107,6 +1107,8 @@ import { R4B_VALUE_SETS } from './value-set-data.js';
 export { R4B_VALUE_SETS };
 import { R4B_SEARCH_PARAMETERS } from './search-parameters.js';
 export { R4B_SEARCH_PARAMETERS };
+import { R4B_COMPARTMENTS } from './compartments.js';
+export { R4B_COMPARTMENTS };
 
 /** Every type of R4B */
 export const R4B_TYPES: Function[] = [
@@ -1818,4 +1820,5 @@ export const R4B_TYPES: Function[] = [
 export const r4bModel = new FhirModel('4.3.0', R4B_TYPES, {
   valueSets: R4B_VALUE_SETS,
   searchParameters: R4B_SEARCH_PARAMETERS,
+  compartments: R4B_COMPARTMENTS,
 });

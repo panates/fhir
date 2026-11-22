@@ -1096,6 +1096,8 @@ import { R4_VALUE_SETS } from './value-set-data.js';
 export { R4_VALUE_SETS };
 import { R4_SEARCH_PARAMETERS } from './search-parameters.js';
 export { R4_SEARCH_PARAMETERS };
+import { R4_COMPARTMENTS } from './compartments.js';
+export { R4_COMPARTMENTS };
 
 /** Every type of R4 */
 export const R4_TYPES: Function[] = [
@@ -1787,4 +1789,5 @@ export const R4_TYPES: Function[] = [
 export const r4Model = new FhirModel('4.0.1', R4_TYPES, {
   valueSets: R4_VALUE_SETS,
   searchParameters: R4_SEARCH_PARAMETERS,
+  compartments: R4_COMPARTMENTS,
 });

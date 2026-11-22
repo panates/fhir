@@ -269,3 +269,41 @@ records in search, read, history, writes and conditional updates; 403 with the a
 anonymous callers; introspection with its cache. Control runs: a refused token falling through,
 a read not checked, search criteria not added, history not filtered, the resource replaced not
 checked, and `checked()` skipping its check, tests fail each time. 279 tests before, 290 after.
+
+## Built: `SmartAuthorizer` and the compartments (2026-11-22)
+
+- **Compartments in the version packages.** The generator writes `compartments.ts`
+  (`R4_COMPARTMENTS` ...) from the core package's CompartmentDefinition resources: by compartment
+  (Patient, Encounter, RelatedPerson, Practitioner, Device), by resource type, the search
+  parameters that put a resource in it. `{def}` (the compartment's own resource, by its id) is left
+  out. `FhirModel.compartmentParams('Patient', 'Observation')` gives `['subject', 'performer']`;
+  undefined for a type not in the compartment. R4 and R4B list 299 parameters, R5 291, and every
+  one is a search parameter of the model.
+- **`SmartAuthorizer({ fhir, user? })`** maps each interaction to its permission (`r` for read,
+  vread, history and `$validate`; `s` search; `c` create; `u` update and patch; `d` delete) and
+  takes the scopes that grant it on the type:
+  - `system/`: allowed, on every resource;
+  - `patient/`: needs `patient` in the principal; a resource must be in that patient's
+    compartment (the Patient itself, one it links, or one that refers to the patient by any of
+    its compartment parameters); a resource of a type not in the compartment (Medication,
+    Organization) is not restricted;
+  - `user/`: then the `user` authorizer, the hospital's own rules (its criteria are added to a
+    search); without one, what the scope names on every resource;
+  - a v2 scope's query is checked against a resource, and added to a search.
+  With several scopes, a resource is allowed when one of them allows it. The history of the whole
+  server needs a scope on every type (`*`) that is not of a patient and has no query.
+- **A search takes the least restricted scope** (no query before a query; `system/` before `user/`
+  before `patient/`), since criteria can only be ANDed. In the patient compartment a search uses
+  one parameter: `patient` when the type has it, else `subject`, else the first. A resource in the
+  compartment by another parameter only (an Observation whose performer is the patient, of another
+  patient's) is then not found by a search, though it can be read: a search may find less than
+  the scopes allow, never more.
+- A scope whose query the server cannot search is left out: it grants nothing.
+
+Tests: `packages/server/test/smart-authorizer.spec.ts`, 8, with an authenticator of the test that
+reads the scopes from a header: the compartment (search, read, writes, a type not in it, a resource
+in it by performer), a v2 query, v1 scopes and each interaction's permission, `system/`, `patient/`
+without a patient, `user/` with and without rules, the compartments of R4 and R5. Control runs: a
+compartment read by one parameter only, no compartment criterion in a search, a scope's query not
+checked against a resource, create taking `r`, `patient/` scopes without a patient, and `user/`
+rules not asked, a test fails each time. 290 tests before, 298 after.

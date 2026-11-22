@@ -80,6 +80,7 @@ const sds = new Map<string, SD>();
 const valueSets = new Map<string, any>();
 const codeSystems = new Map<string, any>();
 const searchParams: any[] = [];
+const compartmentDefs: any[] = [];
 
 for (const file of readdirSync(srcDir)) {
   if (!file.endsWith('.json')) continue;
@@ -87,13 +88,16 @@ for (const file of readdirSync(srcDir)) {
     !file.startsWith('StructureDefinition-') &&
     !file.startsWith('ValueSet-') &&
     !file.startsWith('CodeSystem-') &&
-    !file.startsWith('SearchParameter-')
+    !file.startsWith('SearchParameter-') &&
+    !file.startsWith('CompartmentDefinition-')
   )
     continue;
   const res = JSON.parse(readFileSync(path.join(srcDir, file), 'utf8'));
   if (res.resourceType === 'ValueSet') valueSets.set(res.url, res);
   else if (res.resourceType === 'CodeSystem') codeSystems.set(res.url, res);
   else if (res.resourceType === 'SearchParameter') searchParams.push(res);
+  else if (res.resourceType === 'CompartmentDefinition' && res.id !== 'example')
+    compartmentDefs.push(res);
   else if (
     res.resourceType === 'StructureDefinition' &&
     ['primitive-type', 'complex-type', 'resource'].includes(res.kind) &&
@@ -769,6 +773,28 @@ const searchParamNotes: string[] = [];
   searchParamNotes.unshift(`${kept.length} search parameters`);
 }
 
+// Compartments: by compartment, the parameters that put each type in it
+{
+  const out = [HEADER];
+  out.push(
+    `/**\n * The compartments of ${VERSION} (Patient, Encounter, RelatedPerson, Practitioner, Device): by\n * resource type, the search parameters that put a resource in the compartment. A type not\n * listed is not in it. From the CompartmentDefinition resources of ${CORE_PACKAGE.name}.\n */`,
+  );
+  out.push(
+    `export const ${VERSION}_COMPARTMENTS: Record<string, Record<string, string[]>> = {`,
+  );
+  for (const cd of compartmentDefs.sort((a, b) => a.code.localeCompare(b.code))) {
+    const byType: Record<string, string[]> = {};
+    for (const r of cd.resource ?? []) {
+      // {def}: the compartment's own resource, by its id, which the model reads so anyway
+      const params = (r.param ?? []).filter((p: string) => p !== '{def}');
+      if (params.length && selected.has(r.code)) byType[r.code] = params;
+    }
+    out.push(`  ${lit(cd.code)}: ${lit(byType)},`);
+  }
+  out.push('};\n');
+  writeFileSync(path.join(outDir, 'compartments.ts'), out.join('\n'));
+}
+
 // Index
 {
   const sorted = [...files.keys()].sort();
@@ -791,12 +817,14 @@ const searchParamNotes: string[] = [];
   out.push(
     `import { ${VERSION}_SEARCH_PARAMETERS } from './search-parameters.js';`,
   );
-  out.push(`export { ${VERSION}_SEARCH_PARAMETERS };\n`);
+  out.push(`export { ${VERSION}_SEARCH_PARAMETERS };`);
+  out.push(`import { ${VERSION}_COMPARTMENTS } from './compartments.js';`);
+  out.push(`export { ${VERSION}_COMPARTMENTS };\n`);
   out.push(
     `/** Every type of ${VERSION} */\nexport const ${VERSION}_TYPES: Function[] = [\n  ${all.join(',\n  ')},\n];\n`,
   );
   out.push(
-    `/** The ${VERSION} model */\nexport const ${VERSION.toLowerCase()}Model = new FhirModel('${FHIR_VERSION}', ${VERSION}_TYPES, {\n  valueSets: ${VERSION}_VALUE_SETS,\n  searchParameters: ${VERSION}_SEARCH_PARAMETERS,\n});\n`,
+    `/** The ${VERSION} model */\nexport const ${VERSION.toLowerCase()}Model = new FhirModel('${FHIR_VERSION}', ${VERSION}_TYPES, {\n  valueSets: ${VERSION}_VALUE_SETS,\n  searchParameters: ${VERSION}_SEARCH_PARAMETERS,\n  compartments: ${VERSION}_COMPARTMENTS,\n});\n`,
   );
   writeFileSync(path.join(outDir, 'index.ts'), out.join('\n'));
 }

@@ -41,7 +41,7 @@ a feature branch: open a pull request to get a run.
 ## Rules and traps
 
 - **Run `pnpm fetch-packages` before you measure.** Without it the tests that need the HL7
-  packages are skipped, and the test count is not the real one (290 with them).
+  packages are skipped, and the test count is not the real one (298 with them).
 - **Tag a slow test `#slow`** at the end of its title: one that runs over every example of a
   version or takes about a second or more. CI runs the tagged tests in a second job, in parallel
   and without coverage (`mocha --grep '#slow'`), and the others with `--invert`. Ten are tagged;
@@ -49,7 +49,8 @@ a feature branch: open a pull request to get a run.
 - **Never edit `packages/{r4,r4b,r5}/src` by hand.** Change `support/build-models.mts`, run
   `pnpm generate` and commit what it writes. A generator change for one version must leave the
   others unchanged: count `@FhirElement` in each (R4 5,534, R4B 5,652, R5 7,097) and the search parameters in
-  `search-parameters.ts` (R4 1,387, R4B 1,425, R5 1,239).
+  `search-parameters.ts` (R4 1,387, R4B 1,425, R5 1,239), and the compartment parameters in
+  `compartments.ts` (R4 299, R4B 299, R5 291).
 - **Generated classes are extended, not changed.** Profiles subclass them
   (`examples/profile/tr-patient.ts`).
 - **`experimentalDecorators` stays on** (legacy decorators, as opra uses them).

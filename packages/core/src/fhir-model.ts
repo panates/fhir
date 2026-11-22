@@ -397,6 +397,8 @@ export class FhirModel {
   private readonly _building = new Set<string>();
   /** Search parameters by base type, then by code */
   private readonly _searchParams = new Map<string, Map<string, FhirSearchParameter>>();
+  /** Compartments: by compartment, by resource type, the parameters that put a resource in it */
+  private _compartments: Record<string, Record<string, string[]>> = {};
   private _warnings: string[] = [];
 
   constructor(
@@ -408,11 +410,29 @@ export class FhirModel {
       valueSets?: Record<string, Record<string, string[]>>;
       /** The search parameters of the version */
       searchParameters?: Iterable<FhirSearchParameter>;
+      /** The compartments of the version: by compartment, by resource type, its parameters */
+      compartments?: Record<string, Record<string, string[]>>;
     },
   ) {
     for (const ctor of classes) this.addClass(ctor);
     if (options?.valueSets) this.addValueSets(options.valueSets);
     if (options?.searchParameters) this.addSearchParameters(options.searchParameters);
+    if (options?.compartments) this._compartments = options.compartments;
+  }
+
+  /**
+   * The search parameters that put a resource of a type in a compartment
+   * ('Patient', 'Observation' -> ['subject', 'performer']); undefined when
+   * the type is not in the compartment. The compartment's own type is in it
+   * by its id too (a Patient is in its own Patient compartment).
+   */
+  compartmentParams(compartment: string, type: string): readonly string[] | undefined {
+    return this._compartments[compartment]?.[type];
+  }
+
+  /** The compartments the model knows: 'Patient', 'Encounter' ... */
+  compartments(): string[] {
+    return Object.keys(this._compartments);
   }
 
   /** Adds search parameters; one with the code of an earlier one on the same base replaces it */
@@ -531,6 +551,7 @@ export class FhirModel {
     for (const [url, e] of this._vsFromPackages) model._vsFromPackages.set(url, e);
     for (const [url, c] of this._csFromPackages) model._csFromPackages.set(url, c);
     for (const [base, byCode] of this._searchParams) model._searchParams.set(base, new Map(byCode));
+    model._compartments = this._compartments;
     for (const ctor of classes) model.addClass(ctor);
     return model;
   }

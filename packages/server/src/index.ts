@@ -7,3 +7,4 @@ export * from './memory-store.js';
 export * from './node-listener.js';
 export * from './authenticators.js';
 export * from './security.js';
+export * from './smart-authorizer.js';
