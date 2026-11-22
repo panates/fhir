@@ -27,7 +27,7 @@ say: how to work in the repository, what is open, and what to watch for.
 | `@fhirjs/fhirpath` | `packages/fhirpath` | Our own FHIRPath engine: hand-written lexer and Pratt parser, evaluator, functions, a UCUM subset, and `check()` (static type checking). No dependency; the FHIR model comes through the `FhirPathModel` interface |
 | `@fhirjs/r4`, `@fhirjs/r4b`, `@fhirjs/r5` | `packages/r4`, `packages/r4b`, `packages/r5` | Generated classes of FHIR 4.0.1, 4.3.0 and 5.0.0, with the codes of their required value sets and `r4Model` / `r4bModel` / `r5Model` |
 | `@fhirjs/client` | `packages/client` | REST client (`FhirClient`), search paging, conditional interactions, `bearerToken()`, SMART on FHIR (discovery, backend services, app launch with PKCE, id_token verification) |
-| `@fhirjs/server` | not started | Designed in [`decisions/server.md`](decisions/server.md): a fetch-style handler, a store interface with an in-memory store, the core of the REST API first |
+| `@fhirjs/server` | not started | Designed in [`decisions/server.md`](decisions/server.md): a fetch-style handler, a store per resource type (an in-memory one, or a facade over an existing database that declares what it supports), the core of the REST API first |
 
 ## Working in the repository
 
@@ -104,11 +104,12 @@ All are recorded in section 13 of the design document. In short:
 
 ## Next steps, as proposed to the user
 
-1. `@fhirjs/server`, as designed in [`decisions/server.md`](decisions/server.md). The four
-   decisions there were taken with the user; the rest is a proposal until it is built.
-2. The repository standards that still fail (`repo-check`): the `main-from-dev` workflow,
-   GitHub settings (merge commits only, a ruleset on `main`, read-only default workflow
-   permission, Dependabot alerts, secret scanning), `CLAUDE.md`, `.claude/settings.json` and the
-   package READMEs.
+1. `@fhirjs/server`, as designed in [`decisions/server.md`](decisions/server.md). The decisions in
+   its two "Decided" sections were taken with the user; the rest is a proposal until it is built.
+   The proposed order: the package, `FhirStore` and `MemoryStore`; read and write interactions;
+   search; conditional interactions, JSON Patch and `$validate`.
+2. The repository standards that still fail (`repo-check`) are GitHub settings only, the user's
+   to change: merge commits only, a ruleset on `main`, read-only default workflow permission,
+   Dependabot alerts, secret scanning and push protection.
 3. A test against HAPI's public test server writes test data to an outside service: ask the
    user first.
