@@ -1,0 +1,30 @@
+{
+  "name": "@fhirjs/sql",
+  "description": "A FHIR store over an existing SQL database, described table by table, on sqb",
+  "version": "0.0.0",
+  "private": true,
+  "license": "BSD-3-Clause",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "default": "./build/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=22.0"
+  },
+  "dependencies": {
+    "@fhirjs/server": "workspace:*",
+    "tslib": "^2.9.1"
+  },
+  "peerDependencies": {
+    "@sqb/builder": "^6.3.7",
+    "@sqb/connect": "^6.3.7"
+  },
+  "devDependencies": {
+    "@sqb/builder": "6.3.7",
+    "@sqb/connect": "6.3.7"
+  }
+}

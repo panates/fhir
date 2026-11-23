@@ -525,6 +525,53 @@ describe('FhirServer search through a store of its own', () => {
     ]);
   });
 
+  it('gives the store a reference to this server as its type and id, without the URL', async () => {
+    const store = new Tckn();
+    store.capabilities = type =>
+      type === 'Observation'
+        ? {
+            interactions: ['search'],
+            versions: 'none',
+            searchParams: ['subject'],
+          }
+        : undefined;
+    const server = new FhirServer({
+      fhir,
+      store,
+      resources: ['Observation'],
+      base: '/fhir',
+    });
+    for (const ref of [
+      'http://localhost/fhir/Patient/p1',
+      'http://localhost/fhir/Patient/p1/_history/2',
+      'http://elsewhere/fhir/Patient/p1',
+      'http://localhost/fhirx/Patient/p1',
+    ])
+      await server.handle(
+        new Request(`http://localhost/fhir/Observation?subject=${ref}`),
+      );
+    expect(store.queries.map(q => q.criteria[0].values[0])).toEqual([
+      { raw: 'http://localhost/fhir/Patient/p1', type: 'Patient', id: 'p1' },
+      {
+        raw: 'http://localhost/fhir/Patient/p1/_history/2',
+        type: 'Patient',
+        id: 'p1',
+      },
+      {
+        raw: 'http://elsewhere/fhir/Patient/p1',
+        url: 'http://elsewhere/fhir/Patient/p1',
+        type: 'Patient',
+        id: 'p1',
+      },
+      {
+        raw: 'http://localhost/fhirx/Patient/p1',
+        url: 'http://localhost/fhirx/Patient/p1',
+        type: 'Patient',
+        id: 'p1',
+      },
+    ]);
+  });
+
   it('sorts only by what the store names in sort, and gives the store the order', async () => {
     const store = new Tckn();
     store.capabilities = () => ({

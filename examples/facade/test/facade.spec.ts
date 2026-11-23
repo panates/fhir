@@ -288,6 +288,8 @@ describe('examples/facade: an EMR in PostgreSQL behind a FHIR server', function 
       'Observation?patient=3',
       'Observation?encounter=5',
       'Observation?encounter:missing=true',
+      'Observation?subject=http://localhost/Patient/3',
+      'Observation?subject=http://elsewhere/Patient/3',
       'Observation?date=ge2025-03-01',
       'Observation?date=2025-01-05',
       'Observation?date=lt2025-02',
