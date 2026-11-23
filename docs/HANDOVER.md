@@ -11,7 +11,7 @@ say: how to work in the repository, what is open, and what to watch for.
   and [panates/fhir#2](https://github.com/panates/fhir/pull/2) (CI and the repository
   standards) are merged into `dev`. `dev` did not exist before this work and was made from
   `main`.
-- 336 tests pass (`pnpm test`), 346 with `FHIR_PG_URL`; type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
+- 336 tests pass (`pnpm test`), 357 with `FHIR_PG_URL`; type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
 - CI: `.github/workflows/test.yml` runs on pull requests into `dev` and on pushes to `dev`. It
   builds, checks the types of the tests, fetches the HL7 packages (cached, keyed by the hash of
   `support/fetch-packages.mts`; a pull request restores the cache `dev`'s runs save), checks that
@@ -30,7 +30,7 @@ say: how to work in the repository, what is open, and what to watch for.
 | `@fhirjs/client`                          | `packages/client`                            | REST client (`FhirClient`), search paging, conditional interactions, `bearerToken()`, SMART on FHIR (discovery, backend services, app launch with PKCE, id_token verification)                                                                                                                                                                                                                                                                                                                                                                                          |
 | `@fhirjs/smart`                           | `packages/smart`                             | JWT verification with JWK Sets (keys kept, read again on rotation, at most every 30 s), and SMART scopes v1 and v2. The client verifies id_tokens with it; the server will verify access tokens                                                                                                                                                                                                                                                                                                                                                                         |
 | `@fhirjs/server`                          | `packages/server`                            | Read, write, history and search (every parameter type but special, `_sort`), conditional interactions, JSON Patch and `$validate` built: the first version of the design is complete. Authentication and authorization next, designed in [`decisions/server-auth.md`](decisions/server-auth.md). Designed in [`decisions/server.md`](decisions/server.md): a fetch-style handler, one store (an in-memory one, or a facade over an existing database that declares what it supports; `RoutingStore` sends types to stores of their own), the core of the REST API first |
-| `@fhirjs/sql`                             | `packages/sql`                               | A store over an existing SQL database, described table by table: reads and searches translated to SQL with sqb. PostgreSQL. Designed and built in [`decisions/sql-facade.md`](decisions/sql-facade.md)                                                                                                                                                                                                                                                                                                                                                                  |
+| `@fhirjs/sql`                             | `packages/sql`                               | A store over an existing SQL database, described table by table: reads, searches and writes translated to SQL with sqb, transactions in one database transaction. PostgreSQL. Designed and built in [`decisions/sql-facade.md`](decisions/sql-facade.md)                                                                                                                                                                                                                                                                                                                |
 
 ## Working in the repository
 
@@ -125,9 +125,14 @@ All are recorded in section 13 of the design document. In short:
    came in with sqb 6.3.7, which fixed a bug found here.
    The helper for SQL facades, `@fhirjs/sql`, is built as designed in
    [`decisions/sql-facade.md`](decisions/sql-facade.md), and `examples/facade` is a description
-   for it; the server strips its own base from reference values. Next, to choose with the user:
-   writes through the helper, a FHIR-shaped PostgreSQL store, or XML, subscriptions and bulk
-   data.
+   for it; the server strips its own base from reference values. Writes through the helper are
+   built ("Writes" in [`decisions/sql-facade.md`](decisions/sql-facade.md)): a table's `row()`
+   maps a resource back, the store refuses what does not read back, versions come from
+   `lastUpdated`, and `transaction()` runs a Bundle in one database transaction. The library's
+   aim is a facade over existing systems (decided with the user, 2026-11-23), so a FHIR-shaped
+   PostgreSQL store is not built: `MemoryStore` serves tests and demos. Next, to choose with the
+   user, by what a facade needs: a resource over more than one row (child tables of identifiers,
+   telecoms, addresses), or XML, subscriptions and bulk data.
 2. The repository standards that still fail (`repo-check`) are GitHub settings only, the user's
    to change: merge commits only, a ruleset on `main`, read-only default workflow permission,
    Dependabot alerts, secret scanning and push protection.

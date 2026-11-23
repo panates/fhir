@@ -344,13 +344,248 @@ describe('examples/facade: an EMR in PostgreSQL behind a FHIR server', function 
       '400 The prefix ap of a date is not supported',
       '400 Patient cannot be sorted by given',
     ]);
-    const write = await sql.handle(
-      new Request('http://localhost/Patient', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/fhir+json' },
-        body: '{"resourceType":"Patient"}',
+  });
+});
+
+describe('examples/facade: writes to the EMR', function () {
+  const schema = `facadew_${Math.random().toString(36).slice(2, 10)}`;
+  let admin: SqbClient;
+  let client: SqbClient;
+  let server: FhirServer;
+
+  before(async function () {
+    if (!URL_) return this.skip();
+    admin = clientOf(URL_);
+    await createSchema(admin, schema);
+    client = clientOf(URL_, schema);
+    server = new FhirServer({
+      fhir,
+      store: new EmrStore({ client }),
+      resources: TYPES,
+    });
+  });
+
+  after(async () => {
+    await client?.close();
+    if (admin) {
+      await dropSchema(admin, schema);
+      await admin.close();
+    }
+  });
+
+  const send = async (
+    method: string,
+    path: string,
+    body?: unknown,
+    headers: Record<string, string> = {},
+  ) => {
+    const r = await server.handle(
+      new Request(`http://localhost/${path}`, {
+        method,
+        headers: {
+          ...(body === undefined
+            ? {}
+            : { 'Content-Type': 'application/fhir+json' }),
+          ...headers,
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
       }),
     );
-    expect(write.status).toBe(405);
+    const text = await r.text();
+    return { status: r.status, body: text ? JSON.parse(text) : undefined };
+  };
+
+  const refusal = async (method: string, path: string, body?: unknown) => {
+    const r = await send(method, path, body);
+    return `${r.status} ${r.body?.issue?.[0]?.diagnostics}`;
+  };
+
+  const withoutMeta = ({ meta: _m, ...r }: Record<string, any>) => r;
+
+  it('writes every row back as it is: the mapping back is the inverse of the mapping', async () => {
+    const changed: string[] = [];
+    let n = 0;
+    for (const type of TYPES) {
+      const all = (await send('GET', `${type}?_count=1000`)).body.entry.map(
+        (e: any) => e.resource,
+      );
+      for (const r of all) {
+        n++;
+        const w = await send('PUT', `${type}/${r.id}`, r, {
+          'If-Match': `W/"${r.meta.versionId}"`,
+        });
+        if (
+          w.status !== 200 ||
+          JSON.stringify(withoutMeta(w.body)) !== JSON.stringify(withoutMeta(r))
+        )
+          changed.push(
+            `${type}/${r.id}: ${w.status} ${w.body?.issue?.[0]?.diagnostics ?? ''}`,
+          );
+      }
+    }
+    expect(n).toBe(260);
+    expect(changed).toEqual([]);
+  });
+
+  it('creates, updates and deletes; refuses what the EMR does not keep', async () => {
+    const patient = {
+      resourceType: 'Patient',
+      identifier: [{ system: 'urn:example:mrn', value: 'MRN9001' }],
+      active: true,
+      name: [{ family: 'Çelik', given: ['Deniz', 'Su'] }],
+      telecom: [{ system: 'email', value: 'deniz@example.org' }],
+      gender: 'female',
+      birthDate: '1995-04-01',
+      address: [{ line: ['1 Sea Road'], city: 'Izmir', country: 'TR' }],
+    };
+    const created = await send('POST', 'Patient', patient);
+    expect(created.status).toBe(201);
+    const { id } = created.body;
+    expect(withoutMeta(created.body)).toEqual({ ...patient, id });
+    expect(
+      (await send('GET', 'Patient?family=celik&given=su')).body.total,
+    ).toBe(1);
+
+    const encounter = {
+      resourceType: 'Encounter',
+      identifier: [{ system: 'urn:example:encounter', value: 'ENC90001' }],
+      status: 'in-progress',
+      class: {
+        system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode',
+        code: 'EMER',
+      },
+      subject: { reference: `Patient/${id}` },
+      period: { start: '2026-11-23T09:30:00+03:00' },
+    };
+    const e = await send('POST', 'Encounter', encounter);
+    expect(e.status).toBe(201);
+    expect(e.body.class.display).toBe('emergency');
+    expect(e.body.period).toEqual({ start: '2026-11-23T06:30:00.000Z' });
+    expect(
+      (await send('GET', `Encounter?patient=${id}&date=ge2026-11-23`)).body
+        .total,
+    ).toBe(1);
+    const finished = await send('PUT', `Encounter/${e.body.id}`, {
+      ...e.body,
+      status: 'finished',
+      period: { ...e.body.period, end: '2026-11-23T12:00:00.000Z' },
+    });
+    expect(finished.status).toBe(200);
+    expect(finished.body.status).toBe('finished');
+
+    expect([
+      await refusal('POST', 'Patient', {
+        ...patient,
+        photo: [{ url: 'http://x/1.png' }],
+      }),
+      await refusal('POST', 'Patient', {
+        ...patient,
+        identifier: [{ system: 'urn:example:mrn', value: 'MRN9002' }],
+        name: [{ family: 'Doe', given: ['A', 'B', 'C'] }],
+      }),
+      await refusal('POST', 'Patient', { resourceType: 'Patient' }),
+      await refusal('POST', 'Patient', patient),
+      await refusal('POST', 'Encounter', {
+        ...encounter,
+        class: { ...encounter.class, code: 'HH' },
+      }),
+      await refusal('DELETE', `Patient/${id}`),
+    ]).toEqual([
+      '422 The Patient has elements the table has no column for: Patient.photo',
+      '422 The Patient has elements the database does not keep: Patient.name[0]',
+      '422 The database refused a value of the Patient',
+      '409 A Patient with the same unique value exists',
+      '422 The database refused a value of the Encounter',
+      '409 The Patient is referred to by other rows of the database',
+    ]);
+
+    // a decimal keeps the digits it is written with
+    const lab = await server.handle(
+      new Request('http://localhost/Observation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/fhir+json' },
+        body: `{"resourceType":"Observation","status":"final","code":{"coding":[{"system":"http://loinc.org","code":"718-7"}]},"subject":{"reference":"Patient/${id}"},"valueQuantity":{"value":13.40,"unit":"g/dL","system":"http://unitsofmeasure.org","code":"g/dL"}}`,
+      }),
+    );
+    expect(lab.status).toBe(201);
+    const labId = Number((await lab.json()).id);
+    const [row] = (
+      await client.execute(
+        `select value_numeric::text as v from lab_results where id = ${labId}`,
+        { objectRows: true },
+      )
+    ).rows!;
+    expect(row.v).toBe('13.40');
+    expect((await send('DELETE', `Observation/${labId}`)).status).toBe(204);
+
+    expect((await send('DELETE', `Encounter/${e.body.id}`)).status).toBe(204);
+    expect((await send('DELETE', `Patient/${id}`)).status).toBe(204);
+    expect((await send('GET', `Patient/${id}`)).status).toBe(404);
+  });
+
+  it('runs a transaction Bundle in one database transaction', async () => {
+    const p = (await send('GET', 'Patient/2')).body;
+    const lab = {
+      resourceType: 'Observation',
+      status: 'final',
+      code: {
+        coding: [
+          {
+            system: 'http://loinc.org',
+            code: '718-7',
+            display: 'Hemoglobin [Mass/volume] in Blood',
+          },
+        ],
+      },
+      subject: { reference: 'Patient/2' },
+      effectiveDateTime: '2026-11-23T08:00:00.000Z',
+      valueQuantity: {
+        value: 13.4,
+        unit: 'g/dL',
+        system: 'http://unitsofmeasure.org',
+        code: 'g/dL',
+      },
+    };
+    const bundle = (labCode: string) => ({
+      resourceType: 'Bundle',
+      type: 'transaction',
+      entry: [
+        {
+          resource: {
+            ...p,
+            telecom: [{ system: 'phone', value: '+905550000999' }],
+          },
+          request: { method: 'PUT', url: 'Patient/2' },
+        },
+        {
+          resource: {
+            ...lab,
+            code: { coding: [{ ...lab.code.coding[0], code: labCode }] },
+          },
+          request: { method: 'POST', url: 'Observation' },
+        },
+      ],
+    });
+    const labs = (await send('GET', 'Observation?patient=2&_summary=count'))
+      .body.total;
+    // the update fails after the create (a transaction creates, then
+    // updates): the lab result is not kept either
+    const failing = bundle('718-7');
+    failing.entry[0].resource.photo = [{ url: 'http://x/1.png' }];
+    expect((await send('POST', '', failing)).status).toBe(422);
+    expect((await send('GET', 'Patient/2')).body).toEqual(p);
+    expect(
+      (await send('GET', 'Observation?patient=2&_summary=count')).body.total,
+    ).toBe(labs);
+    // a test the EMR's catalogue does not have
+    expect((await send('POST', '', bundle('0000-0'))).status).toBe(422);
+    const r = await send('POST', '', bundle('718-7'));
+    expect(r.status).toBe(200);
+    expect((await send('GET', 'Patient/2')).body.telecom).toEqual([
+      { system: 'phone', value: '+905550000999' },
+    ]);
+    expect(
+      (await send('GET', 'Observation?patient=2&_summary=count')).body.total,
+    ).toBe(labs + 1);
   });
 });

@@ -1,5 +1,7 @@
+import { decimalValue, onlyElements, referenceId } from '@fhirjs/sql';
+
 /**
- * The rows of the EMR as FHIR resources. Each select list gives the columns
+ * The rows of the EMR as FHIR resources, and back. Each select list gives the columns
  * as text where the driver would give a type of its own (dates, numbers),
  * so that the mapping does not depend on the driver.
  */
@@ -192,4 +194,111 @@ export function observationOf(r: Row): Record<string, any> {
           ]
         : undefined,
   });
+}
+
+/* Resources to rows: the mapping back, for writes */
+
+const codeOf = (map: Record<string, string>, value: unknown) =>
+  Object.keys(map).find(k => map[k] === value) ?? null;
+
+const codingOf = (concept: any, system: string): string | undefined =>
+  concept?.coding?.find((c: any) => c.system === system)?.code;
+
+export function patientRow(r: Row): Row {
+  onlyElements(r, [
+    'identifier',
+    'active',
+    'name',
+    'telecom',
+    'gender',
+    'birthDate',
+    'deceasedDateTime',
+    'address',
+  ]);
+  const identifier = (system: string) =>
+    r.identifier?.find((i: any) => i.system === system)?.value ?? null;
+  const telecom = (system: string) =>
+    r.telecom?.find((t: any) => t.system === system)?.value ?? null;
+  const [name] = r.name ?? [];
+  const [address] = r.address ?? [];
+  return {
+    mrn: identifier(MRN),
+    national_id: identifier(NATIONAL_ID),
+    first_name: name?.given?.[0] ?? null,
+    middle_name: name?.given?.[1] ?? null,
+    last_name: name?.family ?? null,
+    gender: codeOf(GENDER, r.gender),
+    birth_date: r.birthDate ?? null,
+    deceased_at: r.deceasedDateTime ?? null,
+    phone: telecom('phone'),
+    email: telecom('email'),
+    address_line: address?.line?.[0] ?? null,
+    city: address?.city ?? null,
+    postal_code: address?.postalCode ?? null,
+    country: address?.country ?? null,
+    // the EMR's default
+    active: r.active ?? true,
+  };
+}
+
+export function encounterRow(r: Row): Row {
+  onlyElements(r, [
+    'identifier',
+    'status',
+    'class',
+    'serviceType',
+    'subject',
+    'participant',
+    'period',
+    'reasonCode',
+  ]);
+  return {
+    encounter_no:
+      r.identifier?.find((i: any) => i.system === 'urn:example:encounter')
+        ?.value ?? null,
+    patient_id: referenceId(r.subject, 'Patient') ?? null,
+    kind:
+      Object.keys(ENCOUNTER_CLASS).find(
+        k =>
+          r.class?.system === ACT_CODE &&
+          ENCOUNTER_CLASS[k][0] === r.class?.code,
+      ) ?? null,
+    status: codeOf(ENCOUNTER_STATUS, r.status),
+    admitted_at: r.period?.start ?? null,
+    discharged_at: r.period?.end ?? null,
+    department: r.serviceType?.text ?? null,
+    physician: r.participant?.[0]?.individual?.display ?? null,
+    diagnosis_code: codingOf(r.reasonCode?.[0], ICD10) ?? null,
+  };
+}
+
+export function observationRow(r: Row): Row {
+  onlyElements(r, [
+    'status',
+    'category',
+    'code',
+    'subject',
+    'encounter',
+    'effectiveDateTime',
+    'issued',
+    'valueQuantity',
+    'valueString',
+    'interpretation',
+    'referenceRange',
+  ]);
+  const [range] = r.referenceRange ?? [];
+  return {
+    patient_id: referenceId(r.subject, 'Patient') ?? null,
+    encounter_id: referenceId(r.encounter, 'Encounter') ?? null,
+    test_code: codingOf(r.code, LOINC) ?? null,
+    value_numeric: decimalValue(r.valueQuantity?.value) ?? null,
+    value_text: r.valueString ?? null,
+    unit: r.valueQuantity?.code ?? null,
+    ref_low: decimalValue(range?.low?.value) ?? null,
+    ref_high: decimalValue(range?.high?.value) ?? null,
+    flag: codingOf(r.interpretation?.[0], INTERPRETATION) ?? null,
+    status: r.status ?? null,
+    collected_at: r.effectiveDateTime ?? null,
+    reported_at: r.issued ?? null,
+  };
 }

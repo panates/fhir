@@ -1,7 +1,7 @@
 /**
- * A facade over the EMR's tables: Patient, Encounter and Observation, read
- * and searched through `@fhirjs/sql`. The tables are described here; the
- * rows are mapped to resources in mapping.ts.
+ * A facade over the EMR's tables: Patient, Encounter and Observation, read,
+ * searched and written through `@fhirjs/sql`. The tables are described
+ * here; rows are mapped to resources and back in mapping.ts.
  */
 import type { SqbClient } from '@sqb/connect';
 import {
@@ -31,10 +31,13 @@ import {
   UCUM,
   encounterColumns,
   encounterOf,
+  encounterRow,
   observationColumns,
   observationOf,
+  observationRow,
   patientColumns,
   patientOf,
+  patientRow,
 } from './mapping.js';
 
 export interface EmrStoreOptions {
@@ -52,6 +55,7 @@ export class EmrStore extends SqlStore {
           lastUpdated: 'updated_at',
           select: patientColumns,
           resource: patientOf,
+          row: patientRow,
           params: {
             identifier: token(
               code('mrn', { system: MRN }),
@@ -83,6 +87,7 @@ export class EmrStore extends SqlStore {
           lastUpdated: 'updated_at',
           select: encounterColumns,
           resource: encounterOf,
+          row: encounterRow,
           params: {
             identifier: token(
               code('encounter_no', { system: 'urn:example:encounter' }),
@@ -106,6 +111,7 @@ export class EmrStore extends SqlStore {
           lastUpdated: 'updated_at',
           select: observationColumns,
           resource: observationOf,
+          row: observationRow,
           params: {
             patient: reference('patient_id', 'Patient'),
             subject: reference('patient_id', 'Patient'),

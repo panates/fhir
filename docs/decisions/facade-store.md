@@ -193,7 +193,8 @@ dependencies of the repository.
   one is missing), and `:missing` on a parameter over two columns (`identifier`, `name`, `given`)
   and on `code-value-quantity` (an item with every part). Nothing worked around the bug.
 - **Refused by the store (400):** `:text`, the prefix `ap` of a date (it depends on the time of
-  the search), a write (405 from the server: the store declares read and search only).
+  the search), a write (405 from the server: the store declares read and search only). _The
+  example writes now, through `@fhirjs/sql`: "Writes" in [`sql-facade.md`](sql-facade.md)._
 
 ### What the helper would take over
 
