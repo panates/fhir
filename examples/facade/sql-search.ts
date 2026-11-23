@@ -48,12 +48,8 @@ export class SqlParams {
 export interface ParamSql {
   /** The condition of one value, without :not and :missing */
   value(v: SearchValue, modifier: string | undefined, p: SqlParams): Cond;
-  /**
-   * The row has a value for the parameter (:missing). Undefined where it
-   * would be an OR of two IS NOT NULL, which sqb 6.3.6 cannot run: with
-   * strictParams it adds a parameter the SQL does not use (reported).
-   */
-  present?: Cond;
+  /** The row has a value for the parameter (:missing) */
+  present: Cond;
 }
 
 const raw = (sql: string) => Raw(sql);
@@ -110,13 +106,10 @@ export function constantCode(code: string, system?: string): Coding {
 
 /** A token over codes: system|code, |code, code, system| */
 export function token(...codings: Coding[]): ParamSql {
-  const columns = new Set(codings.map(c => c.column));
+  // one test per column: phone with and without its system is one column
+  const byColumn = new Map(codings.map(c => [c.column, c.present]));
   return {
-    present: columns.has(undefined)
-      ? TRUE
-      : columns.size === 1
-        ? codings[0].present
-        : undefined,
+    present: byColumn.has(undefined) ? TRUE : or([...byColumn.values()]),
     value(v, modifier, p) {
       if (modifier === 'text') refuse(':text');
       return or(
@@ -152,7 +145,7 @@ const likeEscaped = (s: string) => s.replace(/[\\%_]/g, c => '\\' + c);
 /** A string over text columns: starts with, :exact, :contains; case and accents ignored */
 export function strings(...exprs: string[]): ParamSql {
   return {
-    present: exprs.length === 1 ? has(exprs[0]) : undefined,
+    present: or(exprs.map(has)),
     value(v, modifier, p) {
       return or(
         exprs.map(e => {
@@ -195,10 +188,7 @@ export function dateColumn(expr: string): DateSql {
   return { lo, hi: `(${lo} + interval '1 day')`, present: has(expr) };
 }
 
-/**
- * A period of two instant columns, either open. Not used yet: whether it has
- * a range is an OR of two IS NOT NULL, which sqb 6.3.6 cannot run.
- */
+/** A period of two instant columns, either open */
 export function periodColumns(start: string, end: string): DateSql {
   return {
     lo: `coalesce(date_trunc('milliseconds', ${start}), cast('-infinity' as timestamptz))`,

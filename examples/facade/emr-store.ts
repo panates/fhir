@@ -41,6 +41,7 @@ import {
   dateColumn,
   instantColumn,
   normalizeSql,
+  periodColumns,
   quantity,
   reference,
   strings,
@@ -126,16 +127,21 @@ const ENCOUNTER: TableMap = {
           emergency: 'EMER',
         }),
       ),
-    // date (the period) waits for sqb: see periodColumns()
+    date: a => date(periodColumns(`${a}.admitted_at`, `${a}.discharged_at`)),
     'reason-code': a => token(codeColumn(`${a}.diagnosis_code`, ICD10)),
   },
   refs: {
     patient: { fk: a => `${a}.patient_id`, target: 'Patient' },
     subject: { fk: a => `${a}.patient_id`, target: 'Patient' },
   },
-  // _sort=date comes with the date parameter: a period's key is its start
-  // ascending (or its end), its end descending (or its start)
-  sort: {},
+  sort: {
+    // a period's key is its start ascending (or its end), its end descending (or its start)
+    date: (a, desc) => {
+      const start = `date_trunc('milliseconds', ${a}.admitted_at)`;
+      const end = `(date_trunc('milliseconds', ${a}.discharged_at) + interval '1 millisecond')`;
+      return desc ? `coalesce(${end}, ${start})` : `coalesce(${start}, ${end})`;
+    },
+  },
 };
 
 const resultPatient = (a: string) => reference(`${a}.patient_id`, 'Patient');
@@ -283,30 +289,18 @@ export class EmrStore implements FhirStore {
     }
     const sql = map.params[c.param.code]?.(alias);
     if (!sql) throw new FhirServerError(400, `No search by ${c.param.code}`);
-    if (c.components) {
-      // one row is one item: every part on it
-      const parts = c.components.map(k => map.params[k.param.code](alias));
-      // an item with every part: an AND of IS NOT NULL, which waits for sqb
-      if (c.missing !== undefined)
-        throw new FhirServerError(
-          400,
-          `${c.param.code}:missing is not supported yet`,
-          'not-supported',
-        );
+    // one row is one item of a composite: every part on it
+    const parts = c.components?.map(k => map.params[k.param.code](alias));
+    if (c.missing !== undefined) {
+      const present = parts ? And(...parts.map(s => s.present)) : sql.present;
+      return (c.missing ? Not(present) : present) as unknown as Cond;
+    }
+    if (parts) {
       return Or(
         ...c.values.map(v =>
           And(...parts.map((s, i) => s.value(v.components![i], undefined, p))),
         ),
       ) as unknown as Cond;
-    }
-    if (c.missing !== undefined) {
-      if (!sql.present)
-        throw new FhirServerError(
-          400,
-          `${c.param.code}:missing is not supported yet`,
-          'not-supported',
-        );
-      return c.missing ? (Not(sql.present) as unknown as Cond) : sql.present;
     }
     const any = Or(...c.values.map(v => sql.value(v, c.modifier, p)));
     return (c.modifier === 'not' ? Not(any) : any) as unknown as Cond;
