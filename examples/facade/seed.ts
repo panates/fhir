@@ -83,7 +83,9 @@ export function seedRows(): Rows {
     const patient = (i % 20) + 1;
     const kind = kinds[i % 3];
     const start = hours('2025-01-01T08:00:00.000Z', n * 97);
-    // planned without dates, planned ahead, still in hospital, finished, cancelled
+    // planned without dates, planned ahead, still in hospital, finished,
+    // cancelled; encounter 1 a long stay, over the next ones; encounter 2 an old
+    // record with its end only
     const status =
       n === 40
         ? 'planned'
@@ -99,10 +101,10 @@ export function seedRows(): Rows {
       patient_id: patient,
       kind,
       status,
-      admitted_at: n === 40 ? null : start,
+      admitted_at: n === 40 || n === 2 ? null : start,
       discharged_at:
         status === 'finished' || status === 'cancelled'
-          ? hours(start, kind === 'inpatient' ? 72 : 4)
+          ? hours(start, n === 1 ? 400 : kind === 'inpatient' ? 72 : 4)
           : null,
       department: departments[i % 3],
       physician: `Dr. ${pick(lasts)}`,

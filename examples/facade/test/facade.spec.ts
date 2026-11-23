@@ -218,6 +218,10 @@ describe('examples/facade: an EMR in PostgreSQL behind a FHIR server', function 
       'Patient?email:missing=false',
       'Patient?address-city=ist',
       'Patient?address-city:missing=true',
+      'Patient?name:missing=true',
+      'Patient?name:missing=false',
+      'Patient?given:missing=false',
+      'Patient?identifier:missing=false',
       'Patient?deceased=true',
       'Patient?deceased=false',
       'Patient?_lastUpdated=ge2026-01-02',
@@ -237,6 +241,9 @@ describe('examples/facade: an EMR in PostgreSQL behind a FHIR server', function 
       'Observation?_sort=-date&_count=10',
       'Observation?_sort=-date&_count=7&_offset=14',
       'Observation?code=2339-0&_count=3&_offset=2',
+      'Encounter?_sort=date',
+      'Encounter?_sort=-date',
+      'Encounter?_sort=-date&_count=8&_offset=8',
     ]);
   });
 
@@ -257,6 +264,19 @@ describe('examples/facade: an EMR in PostgreSQL behind a FHIR server', function 
       'Encounter?reason-code:missing=true',
       'Encounter?reason-code:not=I10',
       'Encounter?identifier=ENC00001',
+      'Encounter?date=2025',
+      'Encounter?date=2025-01-05',
+      'Encounter?date=2025-02',
+      'Encounter?date=ge2025-04-01',
+      'Encounter?date=gt2025-04-01T00:00:00Z',
+      'Encounter?date=le2025-02-01',
+      'Encounter?date=lt2025-02-01',
+      'Encounter?date=ne2025-01-05',
+      'Encounter?date=sa2025-03-01',
+      'Encounter?date=eb2025-03-01',
+      'Encounter?date=ge2025-03-01&date=le2025-03-31',
+      'Encounter?date:missing=true',
+      'Encounter?date:missing=false',
       'Observation?code=2339-0',
       'Observation?code=http://loinc.org|718-7',
       'Observation?code=2339-0,718-7',
@@ -289,6 +309,8 @@ describe('examples/facade: an EMR in PostgreSQL behind a FHIR server', function 
       'Observation?code-value-quantity=2339-0$gt90',
       'Observation?code-value-quantity=http://loinc.org|718-7$lt12',
       'Observation?code-value-quantity=2339-0$gt90,718-7$lt12',
+      'Observation?code-value-quantity:missing=false',
+      'Observation?code-value-quantity:missing=true',
       'Observation?subject:Patient.name=doe',
       'Observation?subject:Patient.gender=female&code=718-7',
       'Observation?encounter.class=EMER',
@@ -309,25 +331,16 @@ describe('examples/facade: an EMR in PostgreSQL behind a FHIR server', function 
 
   it('refuses what it does not answer', async () => {
     const refused = [
-      // the period of an encounter waits for sqb (an OR of two IS NOT NULL)
-      'Encounter?date=2025',
-      'Patient?name:missing=true',
-      'Observation?code-value-quantity:missing=true',
       'Patient?gender:text=male',
       'Observation?date=ap2025',
       'Patient?_sort=given',
-      'Encounter?_sort=date',
     ];
     const answers: string[] = [];
     for (const path of refused) answers.push(await answer(sql, path));
     expect(answers).toEqual([
-      '400 Unknown search parameter date for Encounter',
-      '400 name:missing is not supported yet',
-      '400 code-value-quantity:missing is not supported yet',
       '400 :text is not supported',
       '400 The prefix ap of a date is not supported',
       '400 Patient cannot be sorted by given',
-      '400 Encounter cannot be sorted by date',
     ]);
     const write = await sql.handle(
       new Request('http://localhost/Patient', {

@@ -7,12 +7,12 @@ exists ("A helper for SQL facades (on sqb) may follow once a first real facade i
 
 ## Decided (2026-11-22)
 
-| Question | Decision | Why |
-| -------- | -------- | --- |
-| Database | A small PostgreSQL schema of our own, shaped like an EMR, with English column names and seed data | It runs in CI and on any machine, and it is the shape a facade usually meets: rows and columns close to FHIR without being FHIR. |
-| Where it lives | `examples/facade`, run by tests; nothing published | The parts worth reusing become a package once they are seen, not before. |
-| SQL layer | sqb (`@sqb/builder`, `@sqb/connect`, `@sqb/postgres`) | Panates' own builder; the later helper is built on it. Conditions are built as objects, so a parsed criterion becomes a condition without string concatenation. |
-| Scope | Patient, Encounter and Observation (lab results): read and search, no writes | Three tables with references between them test chains, `_has` and a composite (`code-value-quantity`). Writes come after the reads have shown how mapping goes. |
+| Question       | Decision                                                                                          | Why                                                                                                                                                             |
+| -------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database       | A small PostgreSQL schema of our own, shaped like an EMR, with English column names and seed data | It runs in CI and on any machine, and it is the shape a facade usually meets: rows and columns close to FHIR without being FHIR.                                |
+| Where it lives | `examples/facade`, run by tests; nothing published                                                | The parts worth reusing become a package once they are seen, not before.                                                                                        |
+| SQL layer      | sqb (`@sqb/builder`, `@sqb/connect`, `@sqb/postgres`)                                             | Panates' own builder; the later helper is built on it. Conditions are built as objects, so a parsed criterion becomes a condition without string concatenation. |
+| Scope          | Patient, Encounter and Observation (lab results): read and search, no writes                      | Three tables with references between them test chains, `_has` and a composite (`code-value-quantity`). Writes come after the reads have shown how mapping goes. |
 
 ## The schema
 
@@ -83,25 +83,25 @@ results with and without a unit, a deceased patient).
 
 ## The mapping
 
-| FHIR | From |
-| ---- | ---- |
-| `Patient.id` | `patients.id`, as text |
-| `Patient.identifier` | `mrn` (system `urn:example:mrn`), `national_id` (system `urn:example:national-id`) |
-| `Patient.name` | `last_name` as `family`; `first_name` and `middle_name` as `given` |
-| `Patient.gender` | `M` male, `F` female, `O` other, `U` unknown |
-| `Patient.birthDate`, `deceasedDateTime` | `birth_date`, `deceased_at` |
-| `Patient.telecom`, `address` | `phone`, `email`; `address_line`, `city`, `postal_code`, `country` |
-| `Patient.active`, `meta.lastUpdated` | `active`, `updated_at` |
-| `Encounter.identifier`, `subject` | `encounter_no`; `Patient/{patient_id}` |
-| `Encounter.status` | `planned`, `in_progress` as `in-progress`, `finished`, `cancelled` |
-| `Encounter.class` | `inpatient` IMP, `outpatient` AMB, `emergency` EMER (v3 ActCode) |
-| `Encounter.period` | `admitted_at` to `discharged_at` |
-| `Encounter.serviceType`, `participant`, `reasonCode` | `department` as text, `physician` as a display, `diagnosis_code` in ICD-10 |
-| `Observation.category`, `code` | `laboratory`; LOINC `test_code` with `lab_tests.name` as its display |
-| `Observation.subject`, `encounter` | `Patient/{patient_id}`, `Encounter/{encounter_id}` |
-| `Observation.value[x]` | `valueQuantity` from `value_numeric` and `unit` (UCUM), or `valueString` from `value_text` |
-| `Observation.interpretation`, `referenceRange` | `flag` in v3 ObservationInterpretation; `ref_low`, `ref_high` |
-| `Observation.status`, `effectiveDateTime`, `issued` | `status`; `collected_at`; `reported_at` |
+| FHIR                                                 | From                                                                                       |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `Patient.id`                                         | `patients.id`, as text                                                                     |
+| `Patient.identifier`                                 | `mrn` (system `urn:example:mrn`), `national_id` (system `urn:example:national-id`)         |
+| `Patient.name`                                       | `last_name` as `family`; `first_name` and `middle_name` as `given`                         |
+| `Patient.gender`                                     | `M` male, `F` female, `O` other, `U` unknown                                               |
+| `Patient.birthDate`, `deceasedDateTime`              | `birth_date`, `deceased_at`                                                                |
+| `Patient.telecom`, `address`                         | `phone`, `email`; `address_line`, `city`, `postal_code`, `country`                         |
+| `Patient.active`, `meta.lastUpdated`                 | `active`, `updated_at`                                                                     |
+| `Encounter.identifier`, `subject`                    | `encounter_no`; `Patient/{patient_id}`                                                     |
+| `Encounter.status`                                   | `planned`, `in_progress` as `in-progress`, `finished`, `cancelled`                         |
+| `Encounter.class`                                    | `inpatient` IMP, `outpatient` AMB, `emergency` EMER (v3 ActCode)                           |
+| `Encounter.period`                                   | `admitted_at` to `discharged_at`                                                           |
+| `Encounter.serviceType`, `participant`, `reasonCode` | `department` as text, `physician` as a display, `diagnosis_code` in ICD-10                 |
+| `Observation.category`, `code`                       | `laboratory`; LOINC `test_code` with `lab_tests.name` as its display                       |
+| `Observation.subject`, `encounter`                   | `Patient/{patient_id}`, `Encounter/{encounter_id}`                                         |
+| `Observation.value[x]`                               | `valueQuantity` from `value_numeric` and `unit` (UCUM), or `valueString` from `value_text` |
+| `Observation.interpretation`, `referenceRange`       | `flag` in v3 ObservationInterpretation; `ref_low`, `ref_high`                              |
+| `Observation.status`, `effectiveDateTime`, `issued`  | `status`; `collected_at`; `reported_at`                                                    |
 
 The store declares `versions: 'none'` (the tables keep no versions), the interactions `read` and
 `search`, `chains` to its own three types, and `sort`. It gives `meta.lastUpdated`, without a
@@ -111,11 +111,11 @@ The store declares `versions: 'none'` (the tables keep no versions), the interac
 
 Each type names the parameters it answers in `searchParams`; the server refuses the others.
 
-| Type | Parameters |
-| ---- | ---------- |
-| Patient | `_id`, `_lastUpdated`, `identifier`, `name`, `family`, `given`, `gender`, `birthdate`, `active`, `phone`, `email`, `address-city`, `deceased` |
-| Encounter | `_id`, `_lastUpdated`, `identifier`, `patient`, `subject`, `status`, `class`, `date`, `reason-code` |
-| Observation | `_id`, `_lastUpdated`, `patient`, `subject`, `encounter`, `code`, `category`, `status`, `date`, `value-quantity`, `code-value-quantity` |
+| Type        | Parameters                                                                                                                                    |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Patient     | `_id`, `_lastUpdated`, `identifier`, `name`, `family`, `given`, `gender`, `birthdate`, `active`, `phone`, `email`, `address-city`, `deceased` |
+| Encounter   | `_id`, `_lastUpdated`, `identifier`, `patient`, `subject`, `status`, `class`, `date`, `reason-code`                                           |
+| Observation | `_id`, `_lastUpdated`, `patient`, `subject`, `encounter`, `code`, `category`, `status`, `date`, `value-quantity`, `code-value-quantity`       |
 
 - **A criterion becomes a sqb condition**, by the kind of column behind the parameter, not by
   the parameter: a token over a code column with a code map (`gender`, `status`), a token over
@@ -181,16 +181,17 @@ cannot say, and what sqb lacked, if anything (reported to its maintainers, not w
 `examples/facade`: `schema.sql`, `seed.ts` (20 patients, 40 encounters, 5 tests, 200 results,
 the same on every run), `mapping.ts` (rows to resources), `sql-search.ts` (the translators),
 `emr-store.ts` (`EmrStore`), `db.ts` (a schema of its own, made and seeded), and
-`test/facade.spec.ts`. sqb 6.3.6 (`@sqb/builder`, `@sqb/connect`, `@sqb/postgres`) as dev
+`test/facade.spec.ts`. sqb 6.3.7 (`@sqb/builder`, `@sqb/connect`, `@sqb/postgres`) as dev
 dependencies of the repository.
 
-- **Every row maps to a valid R4 resource**, and 118 searches give the same resources, in the
+- **Every row maps to a valid R4 resource**, and 140 searches give the same resources, in the
   same order, on the facade and on the same resources matched by FHIRPath: each parameter,
   modifier and prefix named above, chains of one and two links, `_has` nested, the composite,
   `_sort`, paging, `_include` and `_revinclude`.
-- **Left out, waiting for sqb** (below): Encounter `date` and `_sort=date` (a period of two
-  columns), and `:missing` on a parameter over two columns (`identifier`, `name`, `given`) and on
-  `code-value-quantity`. They answer 400 ("not supported yet"); nothing works around the bug.
+- **Waited for sqb 6.3.7** (below): Encounter `date` and `_sort=date` (a period of two columns,
+  either open; its sort key is its start ascending and its end descending, the other end where
+  one is missing), and `:missing` on a parameter over two columns (`identifier`, `name`, `given`)
+  and on `code-value-quantity` (an item with every part). Nothing worked around the bug.
 - **Refused by the store (400):** `:text`, the prefix `ap` of a date (it depends on the time of
   the search), a write (405 from the server: the store declares read and search only).
 
@@ -219,22 +220,23 @@ dependencies of the repository.
   it, where the memory store, given the base, finds the patient. A helper would want the base in
   `SearchQuery` or in the request context.
 
-### Found in sqb (6.3.6), to report
+### Found in sqb (6.3.6), fixed in 6.3.7
 
-With `strictParams`, which `SqbConnection.execute()` always sets, two `IS NULL` / `IS NOT NULL`
-tests directly in one `AND` or `OR` add a parameter the SQL does not use:
+Two `IS NULL` / `IS NOT NULL` tests in one `AND` or `OR` left a parameter the SQL does not use:
 
 ```ts
-Select('x').from('t')
+Select('x')
+  .from('t')
   .where(Or(IsNot('a', null), IsNot('c', null)), Gt('b', Param('p0')))
   .generate({ dialect: 'postgres', params: { p0: 1 }, strictParams: true });
 // sql: select x from t where (a is not null or c is not null) and b > $2
 // params: [null, 1]
 ```
 
-PostgreSQL refuses it ("could not determine data type of parameter $1"). One test alone, or each
-inside its own `AND`, is written right. To be reported to sqb's maintainers; Encounter `date`
-and the `:missing` above come in when it is fixed.
+PostgreSQL refuses it ("could not determine data type of parameter $1"). The postgres dialect
+drops the parameter of a null comparison it writes as `IS [NOT] NULL`, and the second one was
+left behind; two `Param()`s bound to null did the same, with or without `strictParams`. Reported
+to sqb's maintainers and fixed in `@sqb/postgres-dialect` 6.3.7.
 
 ## Not in this step
 
