@@ -20,11 +20,11 @@
     "tslib": "^2.9.1"
   },
   "peerDependencies": {
-    "@sqb/builder": "^6.3.7",
-    "@sqb/connect": "^6.3.7"
+    "@sqb/builder": "^6.3.8",
+    "@sqb/connect": "^6.3.8"
   },
   "devDependencies": {
-    "@sqb/builder": "6.3.7",
-    "@sqb/connect": "6.3.7"
+    "@sqb/builder": "6.3.8",
+    "@sqb/connect": "6.3.8"
   }
 }

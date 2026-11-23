@@ -13,6 +13,8 @@ type Row = Record<string, any>;
 
 /** Rows of a resource in a table of their own */
 export interface SqlChild {
+  /** Called once, before the child is first used: what it must look up (sqb's metadata) */
+  prepare?(): Promise<void>;
   /**
    * The rows of each parent, by the parent's id as text, in their order; a
    * parent without rows may be left out. Called once for a read and once

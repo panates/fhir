@@ -197,14 +197,14 @@ importers:
         specifier: ^2.1.8
         version: 2.1.8
       '@sqb/builder':
-        specifier: 6.3.7
-        version: 6.3.7(supports-color@8.1.1)
+        specifier: 6.3.8
+        version: 6.3.8(supports-color@8.1.1)
       '@sqb/connect':
-        specifier: 6.3.7
-        version: 6.3.7(@sqb/builder@6.3.7(supports-color@8.1.1))(reflect-metadata@0.2.2)(supports-color@8.1.1)
+        specifier: 6.3.8
+        version: 6.3.8(@sqb/builder@6.3.8(supports-color@8.1.1))(reflect-metadata@0.2.2)(supports-color@8.1.1)
       '@sqb/postgres':
-        specifier: 6.3.7
-        version: 6.3.7(@sqb/builder@6.3.7(supports-color@8.1.1))(@sqb/connect@6.3.7(@sqb/builder@6.3.7(supports-color@8.1.1))(reflect-metadata@0.2.2)(supports-color@8.1.1))(@sqb/postgres-dialect@6.3.7(@sqb/builder@6.3.7(supports-color@8.1.1)))(postgrejs@3.15.2)
+        specifier: 6.3.8
+        version: 6.3.8(@sqb/builder@6.3.8(supports-color@8.1.1))(@sqb/connect@6.3.8(@sqb/builder@6.3.8(supports-color@8.1.1))(reflect-metadata@0.2.2)(supports-color@8.1.1))(@sqb/postgres-dialect@6.3.8(@sqb/builder@6.3.8(supports-color@8.1.1)))(postgrejs@3.15.2)
       '@swc-node/register':
         specifier: ^1.12.1
         version: 1.12.1(@swc/core@1.16.22(@swc/helpers@0.5.24))(@swc/types@0.1.28)(supports-color@8.1.1)(typescript@6.0.3)
@@ -333,11 +333,11 @@ importers:
         version: 2.9.1
     devDependencies:
       '@sqb/builder':
-        specifier: 6.3.7
-        version: 6.3.7(supports-color@8.1.1)
+        specifier: 6.3.8
+        version: 6.3.8(supports-color@8.1.1)
       '@sqb/connect':
-        specifier: 6.3.7
-        version: 6.3.7(@sqb/builder@6.3.7(supports-color@8.1.1))(reflect-metadata@0.2.2)(supports-color@8.1.1)
+        specifier: 6.3.8
+        version: 6.3.8(@sqb/builder@6.3.8(supports-color@8.1.1))(reflect-metadata@0.2.2)(supports-color@8.1.1)
 
 packages:
 
@@ -616,30 +616,30 @@ packages:
   '@sinclair/typebox@0.34.52':
     resolution: {integrity: sha512-XiMQh7qqVlxZzcVD+kkGMNGMzcTrDMLWI7S4x7z1MkCkbDPrekpZXEUK0eZqZFMuHQg2a2DZOcDIh9o5v3Gonw==}
 
-  '@sqb/builder@6.3.7':
-    resolution: {integrity: sha512-gMipG9it+oqTnZlfHRJDuAku7hGgA9sQCsxYsTlFdBAeQEqHPHCfOAFB3FoAUoGX3pnPmhpqmRlRHN5hwfmagw==}
+  '@sqb/builder@6.3.8':
+    resolution: {integrity: sha512-lqKssE7uhWDTYIIpa71lwDv7lVcDjfvGKml6X6Og1EbLr6MUAhFZVokc7miQgX+gnVv/qkQJ8RyYZUVzKP6JpQ==}
     engines: {node: '>=22'}
 
-  '@sqb/connect@6.3.7':
-    resolution: {integrity: sha512-ebxxYEdejM0Wmwsmipext3T4HaaC42kK4hTQiJjvNWSVKb37fBquFi/RqogbFjTTh+boOd4a3qQtLq4a90R/RA==}
+  '@sqb/connect@6.3.8':
+    resolution: {integrity: sha512-aGZ7ORm07Gk55/mfF/BOEbx3kIt5gBwxmi0evGKv7voZLoBDewzOk4XL/MgdkQmNYQ0pwxTBhvfaHbTfdD17Kg==}
     engines: {node: '>=22'}
     peerDependencies:
-      '@sqb/builder': ^6.3.7
+      '@sqb/builder': ^6.3.8
       reflect-metadata: ^0.2.2
 
-  '@sqb/postgres-dialect@6.3.7':
-    resolution: {integrity: sha512-SDj9f0LkeDeKuwW6hu9CSMC7nUaWQr4jNszsoMdP73GLpGossGsJros+9s7vc50RRxBnlPilvD8iZ+X/Cx2ztA==}
+  '@sqb/postgres-dialect@6.3.8':
+    resolution: {integrity: sha512-5WF6fSQ1u43swwyaDokqB79BCqPPjF1840+V3u25VLwZwLhooAqBsSs9sF+Hd45TKGjZ8eE4D5GIaOgnlDaP1g==}
     engines: {node: '>=22'}
     peerDependencies:
-      '@sqb/builder': ^6.3.7
+      '@sqb/builder': ^6.3.8
 
-  '@sqb/postgres@6.3.7':
-    resolution: {integrity: sha512-FhlNi8zLn44TRE5oWzWdSMoxzjLjChaZwzos3dHMZob63a4NtNdUlmGdTcSDoxbh4jqNUjw1tigT2UpeleSZpA==}
+  '@sqb/postgres@6.3.8':
+    resolution: {integrity: sha512-w6PJ2Am2cbfE7xXJvPX1lbnjP3CUlRnnpyMtCvk86xBJxPsNq3+TaM2EE0YOVxCOG+2Ijd7WBB2vjdGXy4BtlQ==}
     engines: {node: '>=22'}
     peerDependencies:
-      '@sqb/builder': ^6.3.7
-      '@sqb/connect': ^6.3.7
-      '@sqb/postgres-dialect': ^6.3.7
+      '@sqb/builder': ^6.3.8
+      '@sqb/connect': ^6.3.8
+      '@sqb/postgres-dialect': ^6.3.8
       postgrejs: '>=3.8.0 <4'
 
   '@swc-node/core@1.15.0':
@@ -1542,7 +1542,7 @@ snapshots:
 
   '@sinclair/typebox@0.34.52': {}
 
-  '@sqb/builder@6.3.7(supports-color@8.1.1)':
+  '@sqb/builder@6.3.8(supports-color@8.1.1)':
     dependencies:
       debug: 4.4.3(supports-color@8.1.1)
       fast-tokenizer: 1.10.2
@@ -1554,10 +1554,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@sqb/connect@6.3.7(@sqb/builder@6.3.7(supports-color@8.1.1))(reflect-metadata@0.2.2)(supports-color@8.1.1)':
+  '@sqb/connect@6.3.8(@sqb/builder@6.3.8(supports-color@8.1.1))(reflect-metadata@0.2.2)(supports-color@8.1.1)':
     dependencies:
       '@jsopen/objects': 2.3.4
-      '@sqb/builder': 6.3.7(supports-color@8.1.1)
+      '@sqb/builder': 6.3.8(supports-color@8.1.1)
       debug: 4.4.3(supports-color@8.1.1)
       doublylinked: 2.5.6
       fast-tokenizer: 1.10.2
@@ -1575,16 +1575,16 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@sqb/postgres-dialect@6.3.7(@sqb/builder@6.3.7(supports-color@8.1.1))':
+  '@sqb/postgres-dialect@6.3.8(@sqb/builder@6.3.8(supports-color@8.1.1))':
     dependencies:
-      '@sqb/builder': 6.3.7(supports-color@8.1.1)
+      '@sqb/builder': 6.3.8(supports-color@8.1.1)
       tslib: 2.9.1
 
-  '@sqb/postgres@6.3.7(@sqb/builder@6.3.7(supports-color@8.1.1))(@sqb/connect@6.3.7(@sqb/builder@6.3.7(supports-color@8.1.1))(reflect-metadata@0.2.2)(supports-color@8.1.1))(@sqb/postgres-dialect@6.3.7(@sqb/builder@6.3.7(supports-color@8.1.1)))(postgrejs@3.15.2)':
+  '@sqb/postgres@6.3.8(@sqb/builder@6.3.8(supports-color@8.1.1))(@sqb/connect@6.3.8(@sqb/builder@6.3.8(supports-color@8.1.1))(reflect-metadata@0.2.2)(supports-color@8.1.1))(@sqb/postgres-dialect@6.3.8(@sqb/builder@6.3.8(supports-color@8.1.1)))(postgrejs@3.15.2)':
     dependencies:
-      '@sqb/builder': 6.3.7(supports-color@8.1.1)
-      '@sqb/connect': 6.3.7(@sqb/builder@6.3.7(supports-color@8.1.1))(reflect-metadata@0.2.2)(supports-color@8.1.1)
-      '@sqb/postgres-dialect': 6.3.7(@sqb/builder@6.3.7(supports-color@8.1.1))
+      '@sqb/builder': 6.3.8(supports-color@8.1.1)
+      '@sqb/connect': 6.3.8(@sqb/builder@6.3.8(supports-color@8.1.1))(reflect-metadata@0.2.2)(supports-color@8.1.1)
+      '@sqb/postgres-dialect': 6.3.8(@sqb/builder@6.3.8(supports-color@8.1.1))
       fast-tokenizer: 1.10.2
       postgrejs: 3.15.2
       putil-promisify: 1.10.1
