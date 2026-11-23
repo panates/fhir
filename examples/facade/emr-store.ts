@@ -1,18 +1,24 @@
 /**
- * A facade over the EMR's tables: reads and searches Patient, Encounter and
- * Observation from them, searches translated to SQL with sqb.
+ * A facade over the EMR's tables: Patient, Encounter and Observation, read
+ * and searched through `@fhirjs/sql`. The tables are described here; the
+ * rows are mapped to resources in mapping.ts.
  */
-import { And, Eq, Exists, Not, Or, Raw, Select } from '@sqb/builder';
 import type { SqbClient } from '@sqb/connect';
 import {
-  type FhirStore,
-  FhirServerError,
-  type SearchCriterion,
-  type SearchQuery,
-  type StoreCapabilities,
-  type StorePage,
-  type StoredResource,
-} from '@fhirjs/server';
+  SqlStore,
+  code,
+  composite,
+  constant,
+  date,
+  day,
+  instant,
+  number,
+  period,
+  quantity,
+  reference,
+  string,
+  token,
+} from '@fhirjs/sql';
 import {
   ACT_CODE,
   CATEGORY,
@@ -30,299 +36,93 @@ import {
   patientColumns,
   patientOf,
 } from './mapping.js';
-import {
-  type Cond,
-  FALSE,
-  type ParamSql,
-  SqlParams,
-  codeColumn,
-  constantCode,
-  date,
-  dateColumn,
-  instantColumn,
-  normalizeSql,
-  periodColumns,
-  quantity,
-  reference,
-  strings,
-  token,
-} from './sql-search.js';
-
-/** A resource type kept in a table */
-interface TableMap {
-  table: string;
-  columns(alias: string): string;
-  resource(row: Record<string, any>): Record<string, any>;
-  /** The search parameters it answers, by code, on a row of the alias */
-  params: Record<string, (alias: string) => ParamSql>;
-  /** Reference parameters by foreign key, for chains and _has */
-  refs: Record<string, { fk: (alias: string) => string; target: string }>;
-  /** _sort: the key of a row, by direction (a period's key is its start ascending, its end descending) */
-  sort: Record<string, (alias: string, descending: boolean) => string>;
-}
-
-const id = (a: string) => token(codeColumn(`cast(${a}.id as text)`));
-const lastUpdated = (a: string) => date(instantColumn(`${a}.updated_at`));
-
-const PATIENT: TableMap = {
-  table: 'patients',
-  columns: patientColumns,
-  resource: patientOf,
-  params: {
-    _id: id,
-    _lastUpdated: lastUpdated,
-    identifier: a =>
-      token(
-        codeColumn(`${a}.mrn`, MRN),
-        codeColumn(`${a}.national_id`, NATIONAL_ID),
-      ),
-    name: a => strings(`${a}.last_name`, `${a}.first_name`, `${a}.middle_name`),
-    family: a => strings(`${a}.last_name`),
-    given: a => strings(`${a}.first_name`, `${a}.middle_name`),
-    gender: a => token(codeColumn(`${a}.gender`, undefined, GENDER)),
-    birthdate: a => date(dateColumn(`${a}.birth_date`)),
-    active: a =>
-      token(
-        codeColumn(`${a}.active`, undefined, { true: 'true', false: 'false' }),
-      ),
-    // a ContactPoint's value is found with or without its system
-    phone: a =>
-      token(codeColumn(`${a}.phone`), codeColumn(`${a}.phone`, 'phone')),
-    email: a =>
-      token(codeColumn(`${a}.email`), codeColumn(`${a}.email`, 'email')),
-    'address-city': a => strings(`${a}.city`),
-    deceased: a =>
-      token(
-        codeColumn(
-          `(case when ${a}.deceased_at is null then 'false' else 'true' end)`,
-        ),
-      ),
-  },
-  refs: {},
-  sort: {
-    family: a => `${normalizeSql(`${a}.last_name`)} collate "C"`,
-    birthdate: (a, desc) =>
-      desc ? `(${a}.birth_date + 1)` : `${a}.birth_date`,
-  },
-};
-
-const encounterPatient = (a: string) => reference(`${a}.patient_id`, 'Patient');
-const ENCOUNTER: TableMap = {
-  table: 'encounters',
-  columns: encounterColumns,
-  resource: encounterOf,
-  params: {
-    _id: id,
-    _lastUpdated: lastUpdated,
-    identifier: a =>
-      token(codeColumn(`${a}.encounter_no`, 'urn:example:encounter')),
-    patient: encounterPatient,
-    subject: encounterPatient,
-    status: a => token(codeColumn(`${a}.status`, undefined, ENCOUNTER_STATUS)),
-    class: a =>
-      token(
-        codeColumn(`${a}.kind`, ACT_CODE, {
-          inpatient: 'IMP',
-          outpatient: 'AMB',
-          emergency: 'EMER',
-        }),
-      ),
-    date: a => date(periodColumns(`${a}.admitted_at`, `${a}.discharged_at`)),
-    'reason-code': a => token(codeColumn(`${a}.diagnosis_code`, ICD10)),
-  },
-  refs: {
-    patient: { fk: a => `${a}.patient_id`, target: 'Patient' },
-    subject: { fk: a => `${a}.patient_id`, target: 'Patient' },
-  },
-  sort: {
-    // a period's key is its start ascending (or its end), its end descending (or its start)
-    date: (a, desc) => {
-      const start = `date_trunc('milliseconds', ${a}.admitted_at)`;
-      const end = `(date_trunc('milliseconds', ${a}.discharged_at) + interval '1 millisecond')`;
-      return desc ? `coalesce(${end}, ${start})` : `coalesce(${start}, ${end})`;
-    },
-  },
-};
-
-const resultPatient = (a: string) => reference(`${a}.patient_id`, 'Patient');
-const OBSERVATION: TableMap = {
-  table: 'lab_results',
-  columns: observationColumns,
-  resource: observationOf,
-  params: {
-    _id: id,
-    _lastUpdated: lastUpdated,
-    patient: resultPatient,
-    subject: resultPatient,
-    encounter: a => reference(`${a}.encounter_id`, 'Encounter'),
-    code: a => token(codeColumn(`${a}.test_code`, LOINC)),
-    category: () => token(constantCode('laboratory', CATEGORY)),
-    status: a => token(codeColumn(`${a}.status`)),
-    date: a => date(instantColumn(`${a}.collected_at`)),
-    'value-quantity': a =>
-      quantity(`cast(${a}.value_numeric as float8)`, `${a}.unit`, UCUM),
-    // a composite: its parts' parameters on the same row
-    'code-value-quantity': () => ({ present: FALSE, value: () => FALSE }),
-  },
-  refs: {
-    patient: { fk: a => `${a}.patient_id`, target: 'Patient' },
-    subject: { fk: a => `${a}.patient_id`, target: 'Patient' },
-    encounter: { fk: a => `${a}.encounter_id`, target: 'Encounter' },
-  },
-  sort: {
-    date: a => `${a}.collected_at`,
-  },
-};
-
-const MAPS: Record<string, TableMap> = {
-  Patient: PATIENT,
-  Encounter: ENCOUNTER,
-  Observation: OBSERVATION,
-};
 
 export interface EmrStoreOptions {
   /** An sqb client of the EMR's database */
   client: SqbClient;
 }
 
-export class EmrStore implements FhirStore {
-  private readonly _client: SqbClient;
-
+export class EmrStore extends SqlStore {
   constructor(options: EmrStoreOptions) {
-    this._client = options.client;
-  }
-
-  capabilities(type: string): StoreCapabilities | undefined {
-    const map = MAPS[type];
-    if (!map) return;
-    return {
-      interactions: ['read', 'search'],
-      versions: 'none',
-      searchParams: Object.keys(map.params),
-      sort: Object.keys(map.sort),
-      chains: target => target in MAPS,
-    };
-  }
-
-  async read(type: string, id: string): Promise<StoredResource | undefined> {
-    const map = MAPS[type];
-    const p = new SqlParams();
-    const query = Select(Raw(map.columns('t')))
-      .from(`${map.table} t`)
-      .where(Eq(Raw('cast(t.id as text)'), p.add(id)));
-    const [row] = await this._rows(query, p);
-    return row && stored(type, map.resource(row));
-  }
-
-  async search(
-    type: string,
-    query: SearchQuery,
-  ): Promise<StorePage<StoredResource>> {
-    const map = MAPS[type];
-    const p = new SqlParams();
-    const aliases = { n: 0 };
-    const where = query.criteria.map(c =>
-      this._criterion(c, map, 't', p, aliases),
-    );
-    const order = [
-      ...query.sort.map(s => {
-        const key = map.sort[s.param.code]?.('t', s.descending);
-        if (!key) throw new FhirServerError(400, `No sort by ${s.param.code}`);
-        return `${key} ${s.descending ? 'desc' : 'asc'} nulls last`;
-      }),
-      't.id',
-    ].join(', ');
-    const select = Select(Raw(map.columns('t')))
-      .from(`${map.table} t`)
-      .where(...where)
-      .orderBy(Raw(order) as any)
-      .limit(query.count)
-      .offset(query.offset);
-    const count = Select(Raw('cast(count(*) as int) as n'))
-      .from(`${map.table} t`)
-      .where(...where);
-    const rows = await this._rows(select, p);
-    const [{ n }] = await this._rows(count, p);
-    return {
-      items: rows.map(r => stored(type, map.resource(r))),
-      total: n,
-    };
-  }
-
-  /** One criterion as a condition on the row of `alias` */
-  private _criterion(
-    c: SearchCriterion,
-    map: TableMap,
-    alias: string,
-    p: SqlParams,
-    aliases: { n: number },
-  ): Cond {
-    if (c.chain) {
-      const ref = map.refs[c.param.code];
-      if (!ref || ref.target !== c.chain.type) return FALSE;
-      const target = MAPS[ref.target];
-      const a = `c${++aliases.n}`;
-      return Exists(
-        Select(Raw('1'))
-          .from(`${target.table} ${a}`)
-          .where(
-            Eq(Raw(`${a}.id`), Raw(ref.fk(alias))),
-            ...c.chain.criteria.map(k =>
-              this._criterion(k, target, a, p, aliases),
+    super({
+      client: options.client,
+      types: {
+        Patient: {
+          table: 'patients',
+          lastUpdated: 'updated_at',
+          select: patientColumns,
+          resource: patientOf,
+          params: {
+            identifier: token(
+              code('mrn', { system: MRN }),
+              code('national_id', { system: NATIONAL_ID }),
             ),
-          ),
-      ) as unknown as Cond;
-    }
-    if (c.has) {
-      const from = MAPS[c.has.type];
-      const ref = from?.refs[c.param.code];
-      if (!ref || MAPS[ref.target] !== map) return FALSE;
-      const a = `h${++aliases.n}`;
-      return Exists(
-        Select(Raw('1'))
-          .from(`${from.table} ${a}`)
-          .where(
-            Eq(Raw(ref.fk(a)), Raw(`${alias}.id`)),
-            ...c.has.criteria.map(k => this._criterion(k, from, a, p, aliases)),
-          ),
-      ) as unknown as Cond;
-    }
-    const sql = map.params[c.param.code]?.(alias);
-    if (!sql) throw new FhirServerError(400, `No search by ${c.param.code}`);
-    // one row is one item of a composite: every part on it
-    const parts = c.components?.map(k => map.params[k.param.code](alias));
-    if (c.missing !== undefined) {
-      const present = parts ? And(...parts.map(s => s.present)) : sql.present;
-      return (c.missing ? Not(present) : present) as unknown as Cond;
-    }
-    if (parts) {
-      return Or(
-        ...c.values.map(v =>
-          And(...parts.map((s, i) => s.value(v.components![i], undefined, p))),
-        ),
-      ) as unknown as Cond;
-    }
-    const any = Or(...c.values.map(v => sql.value(v, c.modifier, p)));
-    return (c.modifier === 'not' ? Not(any) : any) as unknown as Cond;
-  }
-
-  private async _rows(
-    query: ReturnType<typeof Select>,
-    p: SqlParams,
-  ): Promise<Record<string, any>[]> {
-    const result = await this._client.execute(query, {
-      params: { ...p.values },
-      objectRows: true,
+            name: string('last_name', 'first_name', 'middle_name'),
+            family: string('last_name'),
+            given: string('first_name', 'middle_name'),
+            gender: token(code('gender', { map: GENDER })),
+            birthdate: date(day('birth_date')),
+            active: token(
+              code('active', { map: { true: 'true', false: 'false' } }),
+            ),
+            // a ContactPoint's value is found with or without its system
+            phone: token(code('phone'), code('phone', { system: 'phone' })),
+            email: token(code('email'), code('email', { system: 'email' })),
+            'address-city': string('city'),
+            deceased: token(
+              code(
+                a =>
+                  `(case when ${a}.deceased_at is null then 'false' else 'true' end)`,
+              ),
+            ),
+          },
+          sort: ['family', 'birthdate'],
+        },
+        Encounter: {
+          table: 'encounters',
+          lastUpdated: 'updated_at',
+          select: encounterColumns,
+          resource: encounterOf,
+          params: {
+            identifier: token(
+              code('encounter_no', { system: 'urn:example:encounter' }),
+            ),
+            patient: reference('patient_id', 'Patient'),
+            subject: reference('patient_id', 'Patient'),
+            status: token(code('status', { map: ENCOUNTER_STATUS })),
+            class: token(
+              code('kind', {
+                system: ACT_CODE,
+                map: { inpatient: 'IMP', outpatient: 'AMB', emergency: 'EMER' },
+              }),
+            ),
+            date: date(period('admitted_at', 'discharged_at')),
+            'reason-code': token(code('diagnosis_code', { system: ICD10 })),
+          },
+          sort: ['date'],
+        },
+        Observation: {
+          table: 'lab_results',
+          lastUpdated: 'updated_at',
+          select: observationColumns,
+          resource: observationOf,
+          params: {
+            patient: reference('patient_id', 'Patient'),
+            subject: reference('patient_id', 'Patient'),
+            encounter: reference('encounter_id', 'Encounter'),
+            code: token(code('test_code', { system: LOINC })),
+            category: token(constant('laboratory', { system: CATEGORY })),
+            status: token(code('status')),
+            date: date(instant('collected_at')),
+            'value-quantity': quantity(
+              number('value_numeric'),
+              code('unit', { system: UCUM }),
+            ),
+            'code-value-quantity': composite(),
+          },
+          sort: ['date'],
+        },
+      },
     });
-    return (result.rows ?? []) as Record<string, any>[];
   }
-}
-
-function stored(type: string, resource: Record<string, any>): StoredResource {
-  return {
-    type,
-    id: resource.id,
-    resource,
-    lastUpdated: resource.meta?.lastUpdated,
-  };
 }

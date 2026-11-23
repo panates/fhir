@@ -238,6 +238,9 @@ drops the parameter of a null comparison it writes as `IS [NOT] NULL`, and the s
 left behind; two `Param()`s bound to null did the same, with or without `strictParams`. Reported
 to sqb's maintainers and fixed in `@sqb/postgres-dialect` 6.3.7.
 
+Since then the example is a description for `@fhirjs/sql` ([`sql-facade.md`](sql-facade.md)):
+`sql-search.ts` moved into the package, and `emr-store.ts` names the kinds of its columns.
+
 ## Not in this step
 
 Writes (create, update, delete), history and versions, transactions, a terminology server for

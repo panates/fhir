@@ -1479,6 +1479,7 @@ export class FhirServer {
           );
         continue;
       }
+      localReferences(c, baseUrl);
       criteria.push(c);
       applied.append(name, value);
     }
@@ -2329,6 +2330,21 @@ const STATUS_TEXT: Record<number, string> = {
   422: 'Unprocessable Entity',
   500: 'Internal Server Error',
 };
+
+/**
+ * A reference value that is an absolute URL of this server is given to the
+ * store as its type and id, without the URL: a store need not know the base
+ * to find its own references. URLs of other servers keep their `url`.
+ */
+function localReferences(c: SearchCriterion, baseUrl: string): void {
+  const local = (v: SearchValue) => {
+    if (v.url?.startsWith(baseUrl + '/') && v.type && v.id) delete v.url;
+    v.components?.forEach(local);
+  };
+  c.values.forEach(local);
+  c.chain?.criteria.forEach(k => localReferences(k, baseUrl));
+  c.has?.criteria.forEach(k => localReferences(k, baseUrl));
+}
 
 /** The response entry of a batch or transaction: status, headers, and the resource or the outcome */
 async function entryOf(response: Response): Promise<Record<string, any>> {

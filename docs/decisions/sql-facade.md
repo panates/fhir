@@ -49,6 +49,7 @@ one `SqlDialect` object, so another database is a second object, not a rewrite.
 import {
   SqlStore,
   code,
+  composite,
   constant,
   date,
   day,
@@ -57,7 +58,6 @@ import {
   period,
   quantity,
   reference,
-  sql,
   string,
   token,
 } from '@fhirjs/sql';
@@ -69,7 +69,7 @@ const store = new SqlStore({
       table: 'patients',
       id: 'id',
       lastUpdated: 'updated_at',
-      select: a => sql`${a}.id::text as id, ${a}.mrn, ...`, // the columns resource() reads
+      select: a => `${a}.id::text as id, ${a}.mrn, ...`, // the columns resource() reads
       resource: patientOf, // a row to a resource: the application's code
       params: {
         identifier: token(
@@ -84,7 +84,7 @@ const store = new SqlStore({
         deceased: token(
           code(
             a =>
-              sql`case when ${a}.deceased_at is null then 'false' else 'true' end`,
+              `case when ${a}.deceased_at is null then 'false' else 'true' end`,
           ),
         ),
       },
@@ -109,7 +109,8 @@ const store = new SqlStore({
           number('value_numeric'),
           code('unit', { system: UCUM }),
         ),
-        // a composite needs no entry: its parts' parameters, on one row
+        // a composite: its parts' parameters, on one row
+        'code-value-quantity': composite(),
       },
     },
   },
@@ -124,13 +125,15 @@ const store = new SqlStore({
   `IS NOT NULL` per column, ORed) and its sort key.
 - **A reference parameter names its foreign key and its target**; chains and `_has` follow it.
   The `refs` of the example go.
-- **A composite** is answered from its components' parameters on one row (one row is one item),
+- **A composite** is named with `composite()` and answered from its components' parameters on one row (one row is one item),
   with `:missing` as the `AND` of their parts; a table that keeps a composite's parts in other
   rows names its own translator.
 - **`sort`** names the parameters to sort by; the key comes from the column's kind (a period's
   start ascending, its end descending, the other end where one is missing; a string's normalized
-  text in `collate "C"`). A parameter over several string columns needs a key of its own.
-- **Its own translator**: any parameter can be a function `(alias, criterion, params) => Cond`,
+  text in `collate "C"`; a token's FHIR code over one column; a reference's `Type/id`). A
+  parameter over several string columns needs a key of its own: `{ param, key }`.
+- **Its own translator**: any parameter can be a function `(ctx, criterion) => Cond` (`ctx` has
+  the row's alias, the query's parameters and the dialect),
   for what the kinds do not cover.
 - **What the store declares** comes from the description: `read` and `search`, `versions:
 'none'`, the parameters, the sort keys, chains to its own types.
@@ -161,6 +164,30 @@ references to other servers keep their `url`, and the SQL store finds nothing fo
 - **The server change** gets a test of its own: a local absolute reference finds the resource on
   the memory store and on the facade.
 - **Control runs** as for the other steps.
+
+## Built (2026-11-23)
+
+`packages/sql`: `columns.ts` (the kinds and their translators), `dialect.ts` (`SqlDialect` and
+`postgres`), `sql-store.ts` (`SqlStore`). The server strips its own base from reference values
+(`localReferences` in `fhir-server.ts`). `examples/facade` is a description now (`emr-store.ts`,
+125 lines), its `sql-search.ts` gone.
+
+- **The example's 140 searches pass unchanged** on the helper, with two added: an absolute
+  reference to the server, found now, and one to another server, not found.
+- **The package's own tests** run a second schema against the memory store the same way (39
+  searches, 11 sorts): an id column named otherwise (`person_no`), a code in a table of its own
+  (by a subquery), a unit every row shares (`constant`), a parameter by code of its own
+  (`identifier`). The database's codes and ids sort otherwise than FHIR's, so that a key taken
+  from the column instead of the FHIR value is caught.
+- **What changed from the proposal**: no `sql` tag (an expression is a string), a composite is
+  named with `composite()` (the store must list it in `searchParams`), `_id` and `_lastUpdated`
+  come from `id` and `lastUpdated`, and a sort key the kind does not have is refused when the
+  store is made.
+- **Control runs**, each caught: the server keeping its own URL, a token sorted by the
+  database's code, a reference sorted by number, a string sorted without normalizing, the unit
+  ignored, a chain and `_has` on `id` instead of the table's id column, a date sorted by its
+  start descending, `:missing` of a token over its last column only, a composite's `:missing` as
+  an `OR`, a parameter of its own skipped.
 
 ## Not in this step
 
