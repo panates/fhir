@@ -60,11 +60,25 @@ const compact = <T extends Record<string, any>>(o: T): T => {
 export const patientColumns = (a: string) => `
   ${a}.id::text as id, ${a}.mrn, ${a}.national_id, ${a}.first_name, ${a}.middle_name,
   ${a}.last_name, ${a}.gender, ${a}.birth_date::text as birth_date,
-  ${instant(`${a}.deceased_at`)} as deceased_at, ${a}.phone, ${a}.email,
-  ${a}.address_line, ${a}.city, ${a}.postal_code, ${a}.country, ${a}.active,
+  ${instant(`${a}.deceased_at`)} as deceased_at, ${a}.active,
   ${instant(`${a}.updated_at`)} as updated_at`;
 
-export function patientOf(r: Row): Record<string, any> {
+/** A patient's telecoms, in the order the patient gave them */
+export const telecomColumns = (a: string) => `${a}.kind, ${a}.value`;
+
+/** A patient's addresses, home then work: read by addresses.ts */
+export interface AddressRow {
+  kind: 'home' | 'work';
+  line: string | null;
+  city: string | null;
+  postal_code: string | null;
+  country: string | null;
+}
+
+export function patientOf(
+  r: Row,
+  children: Record<string, Row[]>,
+): Record<string, any> {
   return compact({
     resourceType: 'Patient',
     id: r.id,
@@ -80,21 +94,19 @@ export function patientOf(r: Row): Record<string, any> {
         given: [r.first_name, r.middle_name].filter(Boolean),
       }),
     ],
-    telecom: [
-      r.phone && { system: 'phone', value: r.phone },
-      r.email && { system: 'email', value: r.email },
-    ].filter(Boolean),
+    telecom: children.telecoms.map(t => ({ system: t.kind, value: t.value })),
     gender: GENDER[r.gender],
     birthDate: r.birth_date,
     deceasedDateTime: r.deceased_at,
-    address: [
+    address: children.addresses.map(a =>
       compact({
-        line: [r.address_line].filter(Boolean),
-        city: r.city,
-        postalCode: r.postal_code,
-        country: r.country,
+        use: a.kind,
+        line: [a.line].filter(Boolean),
+        city: a.city,
+        postalCode: a.postal_code,
+        country: a.country,
       }),
-    ],
+    ),
   });
 }
 
@@ -102,9 +114,15 @@ export const encounterColumns = (a: string) => `
   ${a}.id::text as id, ${a}.encounter_no, ${a}.patient_id::text as patient_id, ${a}.kind,
   ${a}.status, ${instant(`${a}.admitted_at`)} as admitted_at,
   ${instant(`${a}.discharged_at`)} as discharged_at, ${a}.department, ${a}.physician,
-  ${a}.diagnosis_code, ${instant(`${a}.updated_at`)} as updated_at`;
+  ${instant(`${a}.updated_at`)} as updated_at`;
 
-export function encounterOf(r: Row): Record<string, any> {
+/** An encounter's diagnoses, the main one first */
+export const diagnosisColumns = (a: string) => `${a}.code`;
+
+export function encounterOf(
+  r: Row,
+  children: Record<string, Row[]>,
+): Record<string, any> {
   const [code, display] = ENCOUNTER_CLASS[r.kind];
   return compact({
     resourceType: 'Encounter',
@@ -122,9 +140,9 @@ export function encounterOf(r: Row): Record<string, any> {
       r.admitted_at || r.discharged_at
         ? compact({ start: r.admitted_at, end: r.discharged_at })
         : undefined,
-    reasonCode: r.diagnosis_code
-      ? [{ coding: [{ system: ICD10, code: r.diagnosis_code }] }]
-      : undefined,
+    reasonCode: children.diagnoses.map(d => ({
+      coding: [{ system: ICD10, code: d.code }],
+    })),
   });
 }
 
@@ -217,10 +235,7 @@ export function patientRow(r: Row): Row {
   ]);
   const identifier = (system: string) =>
     r.identifier?.find((i: any) => i.system === system)?.value ?? null;
-  const telecom = (system: string) =>
-    r.telecom?.find((t: any) => t.system === system)?.value ?? null;
   const [name] = r.name ?? [];
-  const [address] = r.address ?? [];
   return {
     mrn: identifier(MRN),
     national_id: identifier(NATIONAL_ID),
@@ -230,12 +245,6 @@ export function patientRow(r: Row): Row {
     gender: codeOf(GENDER, r.gender),
     birth_date: r.birthDate ?? null,
     deceased_at: r.deceasedDateTime ?? null,
-    phone: telecom('phone'),
-    email: telecom('email'),
-    address_line: address?.line?.[0] ?? null,
-    city: address?.city ?? null,
-    postal_code: address?.postalCode ?? null,
-    country: address?.country ?? null,
     // the EMR's default
     active: r.active ?? true,
   };
@@ -268,8 +277,35 @@ export function encounterRow(r: Row): Row {
     discharged_at: r.period?.end ?? null,
     department: r.serviceType?.text ?? null,
     physician: r.participant?.[0]?.individual?.display ?? null,
-    diagnosis_code: codingOf(r.reasonCode?.[0], ICD10) ?? null,
   };
+}
+
+/** A patient's telecoms as rows: the rank is their order */
+export function telecomRows(r: Row): Row[] {
+  return (r.telecom ?? []).map((t: any, rank: number) => ({
+    kind: t.system ?? null,
+    value: t.value ?? null,
+    rank,
+  }));
+}
+
+/** An encounter's diagnoses as rows: the first is the main one */
+export function diagnosisRows(r: Row): Row[] {
+  return (r.reasonCode ?? []).map((c: any, i: number) => ({
+    code: codingOf(c, ICD10) ?? null,
+    rank: i + 1,
+  }));
+}
+
+/** A patient's addresses as rows, by their use: home or work */
+export function addressRows(r: Row): AddressRow[] {
+  return (r.address ?? []).map((a: any) => ({
+    kind: a.use,
+    line: a.line?.[0] ?? null,
+    city: a.city ?? null,
+    postal_code: a.postalCode ?? null,
+    country: a.country ?? null,
+  }));
 }
 
 export function observationRow(r: Row): Row {

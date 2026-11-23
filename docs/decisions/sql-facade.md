@@ -251,4 +251,58 @@ referred row's delete as 422, a read-only table declared written, every written 
 
 History and older versions (`vread`), ids given by the client or the server (a transaction's
 placeholders), conditional writes beyond what the server does over search, and a resource kept in
-more than one row (a patient's several addresses).
+more than one row (a patient's several addresses). _Child tables came next: see "Child tables"._
+
+## Child tables (2026-11-23)
+
+A resource over more than one row: a patient's telecoms and addresses, an encounter's diagnoses.
+
+### Decided
+
+| Question            | Decision                                                                                                                                  | Why                                                                                                                                                                                        |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| One way or several  | The store asks a child for four things (`SqlChild`: `read`, `join`, `write`, `remove`); how a child does them is its own                  | No single way fits every EMR (the user's view): a plain child table, SQL of the application's own (an upsert, EAV, a JSON column), or sqb's ORM where the schema suits it. They are mixed. |
+| Reading             | The store asks each child for the rows of a whole page at once (`read(parentIds)`), and gives them to `resource(row, children)` by parent | One query a child a page, not one a row; the values come from the driver with their types (a JSON aggregate would turn `13.40` into `13.4`); no SQL of one database in the description.    |
+| Writing             | `childTable()` matches rows by a key: the same key updated, a new one inserted, one gone deleted                                          | A kept row keeps its id and the columns FHIR does not see (`verified_at` of a telecom). Without a key, the rows are deleted and inserted again.                                            |
+| Searching           | `child(name, param, where?)` wraps a parameter of any kind: `EXISTS` a row of the child that matches                                      | `:missing` and `:not` work as on a column (`NOT EXISTS`); a sort takes the lowest of a resource's rows ascending, the highest descending, as FHIR asks.                                    |
+| sqb's ORM (`@Link`) | A child over sqb entities is a later step                                                                                                 | It needs sqb's filters and projections joined to the parameters' SQL; a separate piece of work.                                                                                            |
+
+### Built
+
+- **`SqlChild`** (`packages/sql/src/children.ts`): `read(parentIds, db)` gives the rows of each
+  parent in their order; `join(parentId, alias)` gives the table and the condition, for searches;
+  `write(parentId, resource, db)` writes the parent's rows after the parent's row; `remove()`
+  deletes them before the parent (not needed when the foreign key cascades). A child without
+  `write` is read only: a resource that changes its rows is refused by the read back.
+- **`childTable({ table, fk, select, order, key, rows })`** is a child over a table with a foreign
+  key to the parent. Two rows of a resource with one key are refused (422).
+- **`SqlTable.children`** names the children; `resource(row, children)` takes their rows. The
+  store reads the parent's id with every row for them, writes the children in the write's
+  transaction, and the read back covers their rows too.
+- **`examples/facade`** keeps telecoms (`patient_telecoms`, by kind and value) and diagnoses
+  (`encounter_diagnoses`, by code) with `childTable()`, and addresses (`patient_addresses`, a home
+  and a work address at most) with a child of its own SQL in `addresses.ts`: an array of ids, an
+  upsert, a cascading foreign key. New parameters: `address`, `address-use`, and a sort by
+  `address-city`.
+
+### Tests and control runs
+
+`examples/facade`: 16 more searches against FHIRPath (a second phone, a work address's city, two
+diagnoses, `:missing` and `:not` over child rows, a sort by the lowest and the highest city), the
+260 rows written back unchanged, and a test of key matching: the rows' ids and `verified_at` kept
+when the phones are swapped, a changed email inserted and the old one deleted, a diagnosis
+removed, five refusals that write nothing, and a patient deleted with its rows.
+`packages/sql/test/sql-children.spec.ts`: a child without a key, a child that is only read,
+searches and sorts over child rows a page at a time, and a `child()` that names no child.
+
+Control runs, each caught: key matching off, children not written on create or on update, not
+removed on delete, a sort's min and max swapped, a child's `where` ignored, every row given to the
+first parent, two rows of one key accepted, a kept row not updated, a row gone not deleted, the
+order of a child ignored, the hand-written addresses not deleted, the parent's id not read. Passing
+`:not` on to the child's parameter changes nothing (the kinds leave `:not` to the store), so it is
+not a control.
+
+### Not in this step
+
+A child over sqb entities (`@Link`), a composite whose parts are on one child row, chains and
+`_has` through a child's reference, and children of children.

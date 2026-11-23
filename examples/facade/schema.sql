@@ -11,14 +11,28 @@ create table patients (
   gender         char(1) not null,            -- M, F, O, U
   birth_date     date,
   deceased_at    timestamptz,
-  phone          text,
-  email          text,
-  address_line   text,
+  active         boolean not null default true,
+  updated_at     timestamptz not null default now()
+);
+
+create table patient_telecoms (
+  id             bigint generated always as identity primary key,
+  patient_id     bigint not null references patients,
+  kind           text not null check (kind in ('phone', 'email')),
+  value          text not null,
+  rank           int not null,                -- the order the patient gave them in
+  verified_at    timestamptz,                 -- the EMR's own, not in FHIR
+  unique (patient_id, kind, value)
+);
+
+create table patient_addresses (               -- a home and a work address at most
+  patient_id     bigint not null references patients on delete cascade,
+  kind           text not null check (kind in ('home', 'work')),
+  line           text,
   city           text,
   postal_code    text,
   country        text,
-  active         boolean not null default true,
-  updated_at     timestamptz not null default now()
+  primary key (patient_id, kind)
 );
 
 create table encounters (
@@ -31,8 +45,15 @@ create table encounters (
   discharged_at  timestamptz,
   department     text,
   physician      text,
-  diagnosis_code text,                        -- ICD-10
   updated_at     timestamptz not null default now()
+);
+
+create table encounter_diagnoses (
+  id             bigint generated always as identity primary key,
+  encounter_id   bigint not null references encounters,
+  code           text not null,               -- ICD-10
+  rank           int not null,                -- 1 the main diagnosis
+  unique (encounter_id, code)
 );
 
 create table lab_tests (                      -- the catalogue

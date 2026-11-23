@@ -11,7 +11,7 @@ say: how to work in the repository, what is open, and what to watch for.
   and [panates/fhir#2](https://github.com/panates/fhir/pull/2) (CI and the repository
   standards) are merged into `dev`. `dev` did not exist before this work and was made from
   `main`.
-- 336 tests pass (`pnpm test`), 357 with `FHIR_PG_URL`; type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
+- 336 tests pass (`pnpm test`), 362 with `FHIR_PG_URL`; type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
 - CI: `.github/workflows/test.yml` runs on pull requests into `dev` and on pushes to `dev`. It
   builds, checks the types of the tests, fetches the HL7 packages (cached, keyed by the hash of
   `support/fetch-packages.mts`; a pull request restores the cache `dev`'s runs save), checks that
@@ -130,9 +130,11 @@ All are recorded in section 13 of the design document. In short:
    maps a resource back, the store refuses what does not read back, versions come from
    `lastUpdated`, and `transaction()` runs a Bundle in one database transaction. The library's
    aim is a facade over existing systems (decided with the user, 2026-11-23), so a FHIR-shaped
-   PostgreSQL store is not built: `MemoryStore` serves tests and demos. Next, to choose with the
-   user, by what a facade needs: a resource over more than one row (child tables of identifiers,
-   telecoms, addresses), or XML, subscriptions and bulk data.
+   PostgreSQL store is not built: `MemoryStore` serves tests and demos. A resource over more than
+   one row is built ("Child tables" in [`decisions/sql-facade.md`](decisions/sql-facade.md)): a
+   child is an `SqlChild`, `childTable()` or the application's own SQL, mixed in one resource.
+   Next, to choose with the user: a child over sqb entities (`@Link`), or XML, subscriptions and
+   bulk data.
 2. The repository standards that still fail (`repo-check`) are GitHub settings only, the user's
    to change: merge commits only, a ruleset on `main`, read-only default workflow permission,
    Dependabot alerts, secret scanning and push protection.

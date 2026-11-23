@@ -39,7 +39,10 @@ export async function createSchema(
     const rows = seedRows();
     for (const table of [
       'patients',
+      'patient_telecoms',
+      'patient_addresses',
       'encounters',
+      'encounter_diagnoses',
       'lab_tests',
       'lab_results',
     ] as const)
