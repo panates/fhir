@@ -128,8 +128,11 @@ All are recorded in section 13 of the design document. In short:
    for it; the server strips its own base from reference values. Writes through the helper are
    built ("Writes" in [`decisions/sql-facade.md`](decisions/sql-facade.md)): a table's `row()`
    maps a resource back, the store refuses what does not read back, versions come from
-   `lastUpdated`, and `transaction()` runs a Bundle in one database transaction. Next, to choose
-   with the user: a FHIR-shaped PostgreSQL store, or XML, subscriptions and bulk data.
+   `lastUpdated`, and `transaction()` runs a Bundle in one database transaction. The library's
+   aim is a facade over existing systems (decided with the user, 2026-11-23), so a FHIR-shaped
+   PostgreSQL store is not built: `MemoryStore` serves tests and demos. Next, to choose with the
+   user, by what a facade needs: a resource over more than one row (child tables of identifiers,
+   telecoms, addresses), or XML, subscriptions and bulk data.
 2. The repository standards that still fail (`repo-check`) are GitHub settings only, the user's
    to change: merge commits only, a ruleset on `main`, read-only default workflow permission,
    Dependabot alerts, secret scanning and push protection.
