@@ -122,6 +122,8 @@ All are recorded in section 13 of the design document. In short:
    as designed in [`decisions/facade-store.md`](decisions/facade-store.md); its "Built" section
    says what a SQL helper would take over. Encounter `date` and the `:missing` over two columns
    came in with sqb 6.3.7, which fixed a bug found here.
+   Next: the helper for SQL facades, `@fhirjs/sql`, as designed in
+   [`decisions/sql-facade.md`](decisions/sql-facade.md); `examples/facade` moves to it.
 2. The repository standards that still fail (`repo-check`) are GitHub settings only, the user's
    to change: merge commits only, a ruleset on `main`, read-only default workflow permission,
    Dependabot alerts, secret scanning and push protection.
