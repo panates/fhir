@@ -121,6 +121,23 @@ interface Resolved {
   versioned: boolean;
 }
 
+/** A parameter over a child's rows, as resolved: the rows, and the parameter of a row */
+interface ChildRows {
+  /** The child, for parts on one row */
+  name: string;
+  /** The parameter on a row of the child */
+  param: ParamSql;
+  /** The rows' table and alias, joined to the parent row of `ctx`, without `where` */
+  rows(ctx: SqlContext): { inner: SqlContext; from: string; on: string };
+  /** The rows the parameter is limited to */
+  where?: (alias: string) => string;
+}
+
+type ChildParamSql = ParamSql & { [CHILD]: ChildRows };
+const CHILD = Symbol('child');
+const childOf = (p: ParamSql | CustomParam | undefined) =>
+  typeof p === 'object' ? (p as Partial<ChildParamSql>)[CHILD] : undefined;
+
 /** Where queries run: the pool, or the connection of a transaction */
 type Db = SqbClient | SqbConnection;
 
@@ -560,11 +577,14 @@ export class SqlStore implements FhirStore {
         `${type}: child(${name}) names no child of the table that can be joined`,
       );
     const n = Object.keys(def.children!).indexOf(name);
-    const rows = (ctx: SqlContext) => {
+    const joined = (ctx: SqlContext) => {
       const inner = { ...ctx, alias: `${ctx.alias}_k${n}` };
       const j = join(columnSql(id, ctx.alias), inner.alias);
-      const on = where ? `${j.on} and ${where(inner.alias)}` : j.on;
-      return { inner, from: `${j.table} ${inner.alias}`, on };
+      return { inner, from: `${j.table} ${inner.alias}`, on: j.on };
+    };
+    const rows = (ctx: SqlContext) => {
+      const r = joined(ctx);
+      return where ? { ...r, on: `${r.on} and ${where(r.inner.alias)}` } : r;
     };
     const exists = (ctx: SqlContext, cond: (inner: SqlContext) => Cond) => {
       const r = rows(ctx);
@@ -572,7 +592,8 @@ export class SqlStore implements FhirStore {
         Select(Raw('1')).from(r.from).where(Raw(r.on), cond(r.inner)),
       ) as unknown as Cond;
     };
-    return {
+    const resolved: ChildParamSql = {
+      [CHILD]: { name, param, rows: joined, where },
       present: ctx => exists(ctx, inner => param.present(inner)),
       // :not is the store's: NOT EXISTS a row that matches
       value: (ctx, v, modifier) =>
@@ -587,6 +608,78 @@ export class SqlStore implements FhirStore {
           }
         : undefined,
     };
+    return resolved;
+  }
+
+  /**
+   * Conditions of parts that must hold on one row: the parent's parts on
+   * its row, a child's parts on one row of the child (one EXISTS a child,
+   * each part's `where` on that row)
+   */
+  private _oneRow(
+    ctx: SqlContext,
+    parts: ParamSql[],
+    cond: (part: ParamSql, i: number, ctx: SqlContext) => Cond,
+  ): Cond {
+    const conds: Cond[] = [];
+    const children = new Map<string, { rows: ChildRows; at: number[] }>();
+    parts.forEach((part, i) => {
+      const c = childOf(part);
+      if (!c) return conds.push(cond(part, i, ctx));
+      const g = children.get(c.name);
+      if (g) g.at.push(i);
+      else children.set(c.name, { rows: c, at: [i] });
+    });
+    for (const { rows, at } of children.values()) {
+      const r = rows.rows(ctx);
+      const wheres = [
+        ...new Set(
+          at
+            .map(i => childOf(parts[i])!.where?.(r.inner.alias))
+            .filter(Boolean),
+        ),
+      ];
+      conds.push(
+        Exists(
+          Select(Raw('1'))
+            .from(r.from)
+            .where(
+              Raw([r.on, ...wheres].join(' and ')),
+              ...at.map(i => cond(childOf(parts[i])!.param, i, r.inner)),
+            ),
+        ) as unknown as Cond,
+      );
+    }
+    return (conds.length === 1 ? conds[0] : And(...conds)) as unknown as Cond;
+  }
+
+  /**
+   * A reference parameter, on the row or on a child's rows: its foreign
+   * key and target, and the rows it is on
+   */
+  private _referenceOf(
+    t: Resolved,
+    code: string,
+  ): { fk: Column; target: string; child?: ChildRows } | undefined {
+    const p = t.params[code];
+    if (typeof p !== 'object') return;
+    if (p.reference) return p.reference;
+    const c = childOf(p);
+    return c?.param.reference && { ...c.param.reference, child: c };
+  }
+
+  /** EXISTS a row of `child` of the row of `ctx` on which `cond` holds; `cond` itself without a child */
+  private _onRows(
+    ctx: SqlContext,
+    child: ChildRows | undefined,
+    cond: (rowCtx: SqlContext) => Cond,
+  ): Cond {
+    if (!child) return cond(ctx);
+    const r = child.rows(ctx);
+    const on = child.where ? `${r.on} and ${child.where(r.inner.alias)}` : r.on;
+    return Exists(
+      Select(Raw('1')).from(r.from).where(Raw(on), cond(r.inner)),
+    ) as unknown as Cond;
   }
 
   private _ctx(alias: string, params: SqlParams): SqlContext {
@@ -601,36 +694,46 @@ export class SqlStore implements FhirStore {
     aliases: { n: number },
   ): Cond {
     if (c.chain) {
-      const ref = this._reference(t, c.param.code);
+      // the reference on the row, or on a row of a child
+      const ref = this._referenceOf(t, c.param.code);
       if (!ref || ref.target !== c.chain.type) return FALSE;
       const target = this._types.get(ref.target)!;
-      const inner = this._ctx(`c${++aliases.n}`, ctx.params);
-      return Exists(
-        Select(Raw('1'))
-          .from(`${target.def.table} ${inner.alias}`)
-          .where(
-            Eq(
-              Raw(columnSql(target.id, inner.alias)),
-              Raw(columnSql(ref.fk, ctx.alias)),
+      const chain = c.chain;
+      return this._onRows(ctx, ref.child, row => {
+        const inner = this._ctx(`c${++aliases.n}`, ctx.params);
+        return Exists(
+          Select(Raw('1'))
+            .from(`${target.def.table} ${inner.alias}`)
+            .where(
+              Eq(
+                Raw(columnSql(target.id, inner.alias)),
+                Raw(columnSql(ref.fk, row.alias)),
+              ),
+              ...chain.criteria.map(k =>
+                this._criterion(k, target, inner, aliases),
+              ),
             ),
-            ...c.chain.criteria.map(k =>
-              this._criterion(k, target, inner, aliases),
-            ),
-          ),
-      ) as unknown as Cond;
+        ) as unknown as Cond;
+      });
     }
     if (c.has) {
       const from = this._types.get(c.has.type);
-      const ref = from && this._reference(from, c.param.code);
+      const ref = from && this._referenceOf(from, c.param.code);
       if (!ref || this._types.get(ref.target) !== t) return FALSE;
       const inner = this._ctx(`h${++aliases.n}`, ctx.params);
       return Exists(
         Select(Raw('1'))
           .from(`${from.def.table} ${inner.alias}`)
           .where(
-            Eq(
-              Raw(columnSql(ref.fk, inner.alias)),
-              Raw(columnSql(t.id, ctx.alias)),
+            // a row of the other type, or of its child, refers to this one
+            this._onRows(
+              inner,
+              ref.child,
+              row =>
+                Eq(
+                  Raw(columnSql(ref.fk, row.alias)),
+                  Raw(columnSql(t.id, ctx.alias)),
+                ) as unknown as Cond,
             ),
             ...c.has.criteria.map(k =>
               this._criterion(k, from, inner, aliases),
@@ -654,25 +757,20 @@ export class SqlStore implements FhirStore {
     });
     if (c.missing !== undefined) {
       const present = parts
-        ? And(...parts.map(s => s.present(ctx)))
+        ? this._oneRow(ctx, parts, (s, _i, row) => s.present(row))
         : param.present(ctx);
       return (c.missing ? Not(present) : present) as unknown as Cond;
     }
     if (parts)
       return Or(
         ...c.values.map(v =>
-          And(
-            ...parts.map((s, i) => s.value(ctx, v.components![i], undefined)),
+          this._oneRow(ctx, parts, (s, i, row) =>
+            s.value(row, v.components![i], undefined),
           ),
         ),
       ) as unknown as Cond;
     const any = Or(...c.values.map(v => param.value(ctx, v, c.modifier)));
     return (c.modifier === 'not' ? Not(any) : any) as unknown as Cond;
-  }
-
-  private _reference(t: Resolved, code: string) {
-    const p = t.params[code];
-    return typeof p === 'object' ? p.reference : undefined;
   }
 
   private async _rows(

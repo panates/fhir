@@ -8,7 +8,7 @@
 import { FhirContext } from '@fhirjs/core';
 import { r4Model } from '@fhirjs/r4';
 import { FhirServer } from '@fhirjs/server';
-import { DataType } from '@sqb/builder';
+import { DataType, Eq } from '@sqb/builder';
 import { Column, Entity, Link, PrimaryKey, SqbClient } from '@sqb/connect';
 import '@sqb/postgres';
 import { expect } from 'expect';
@@ -90,6 +90,22 @@ class Person {
 
   @(Link().toOne(() => Spoken, { sourceKey: 'id', targetKey: 'personId' }))
   declare firstLanguage: Spoken;
+
+  // two links over one table, by conditions of their own (a property named
+  // apart from its column: kind is `medium`)
+  @(Link().toMany(() => Contact, {
+    sourceKey: 'id',
+    targetKey: 'ownerId',
+    where: Eq('kind', 'phone'),
+  }))
+  declare phones: Contact[];
+
+  @(Link().toMany(() => Contact, {
+    sourceKey: 'id',
+    targetKey: 'ownerId',
+    where: { kind: 'email' },
+  }))
+  declare emails: Contact[];
 }
 
 const DDL = [
@@ -328,6 +344,121 @@ describe('SqlStore linked children (sqb entities)', function () {
     );
   });
 
+  it('reads, writes and searches two links over one table, each by its conditions', async () => {
+    const telecoms = (kind: string) =>
+      linked(Person, `${kind}s`, {
+        sort: ['position'],
+        key: ['value'],
+        rows: r =>
+          (r.telecom ?? [])
+            .filter((t: any) => t.system === kind)
+            .map((t: any, position: number) => ({
+              // the link's condition: the row is one of its own
+              kind,
+              value: t.value ?? null,
+              position,
+            })),
+      });
+    const table: SqlTable = {
+      ...patient(),
+      resource: (r, c) => ({
+        resourceType: 'Patient',
+        id: r.id,
+        identifier: [{ system: 'urn:mrn', value: r.mrn }],
+        ...(c.phones.length + c.emails.length && {
+          telecom: [...c.phones, ...c.emails].map(t => ({
+            system: t.kind,
+            value: t.value,
+          })),
+        }),
+      }),
+      row: r => {
+        onlyElements(r, ['identifier', 'telecom']);
+        return { mrn: r.identifier?.[0]?.value ?? null };
+      },
+      children: { phones: telecoms('phone'), emails: telecoms('email') },
+      // no where of their own: the links' conditions limit the rows
+      params: {
+        phone: child('phones', token(code('val'))),
+        email: child('emails', token(code('val'))),
+      },
+    };
+    const links = new FhirServer({
+      fhir,
+      store: new SqlStore({ client, types: { Patient: table } }),
+      resources: ['Patient'],
+    });
+    const go = async (method: string, path: string, body?: unknown) => {
+      const r = await links.handle(
+        new Request(`http://localhost/${path}`, {
+          method,
+          headers:
+            body === undefined
+              ? {}
+              : { 'Content-Type': 'application/fhir+json' },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        }),
+      );
+      const text = await r.text();
+      return { status: r.status, body: text ? JSON.parse(text) : undefined };
+    };
+    const created = await go('POST', 'Patient', {
+      resourceType: 'Patient',
+      identifier: [{ system: 'urn:mrn', value: 'C1' }],
+      telecom: [
+        { system: 'phone', value: '+931' },
+        { system: 'phone', value: '+932' },
+        { system: 'email', value: 'c@x.org' },
+      ],
+    });
+    expect(created.status).toBe(201);
+    const p = created.body;
+    const before = await contacts(p.id);
+    expect(before.map(c => [c.medium, c.val, c.pos])).toEqual([
+      ['phone', '+931', 0],
+      ['email', 'c@x.org', 0],
+      ['phone', '+932', 1],
+    ]);
+    // the phones change: the email's row is left as it was
+    const changed = {
+      ...p,
+      telecom: [
+        { system: 'phone', value: '+933' },
+        { system: 'email', value: 'c@x.org' },
+      ],
+    };
+    const u = await go('PUT', `Patient/${p.id}`, changed);
+    expect([u.status, u.body]).toEqual([200, changed]);
+    const after = await contacts(p.id);
+    expect(after.map(c => [c.medium, c.val])).toEqual([
+      ['phone', '+933'],
+      ['email', 'c@x.org'],
+    ]);
+    expect(after.find(c => c.medium === 'email')!.no).toBe(
+      before.find(c => c.medium === 'email')!.no,
+    );
+    // a search by one link: the other's rows are not its own
+    const ids = async (q: string) =>
+      ((await go('GET', `Patient?${q}`)).body.entry ?? [])
+        .map((e: any) => e.resource.id)
+        .join(',');
+    expect([
+      await ids('phone=%2B933'),
+      await ids('phone=c@x.org'),
+      await ids('email=c@x.org'),
+      await ids('email=%2B933'),
+    ]).toEqual([p.id, '', p.id, '']);
+    // a telecom neither link keeps: not read back, refused
+    const wrong = await go('PUT', `Patient/${p.id}`, {
+      ...p,
+      telecom: [{ system: 'fax', value: '+934' }],
+    });
+    expect(wrong.status).toBe(422);
+    // deleted: each link deletes its own rows
+    expect((await go('DELETE', `Patient/${p.id}`)).status).toBe(204);
+    expect(await contacts(p.id)).toEqual([]);
+  });
+
   it('refuses a link it cannot follow, when the store is first used', async () => {
     const refusal = async (children: SqlTable['children']) => {
       const store = new SqlStore({
@@ -356,7 +487,7 @@ describe('SqlStore linked children (sqb entities)', function () {
     ]).toEqual([
       'linked(NotAnEntity, contacts): NotAnEntity is not an entity with a link contacts',
       'linked(Person, nope): Person is not an entity with a link nope',
-      'linked(Person, firstLanguage): the link must be one toMany hop without conditions',
+      'linked(Person, firstLanguage): the link must be one toMany hop',
     ]);
   });
 });

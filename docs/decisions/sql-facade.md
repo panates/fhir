@@ -306,7 +306,8 @@ not a control.
 
 A child over sqb entities (`@Link`), a composite whose parts are on one child row, chains and
 `_has` through a child's reference, and children of children. _A child over sqb entities came
-next: see "A child over sqb entities"._
+next: see "A child over sqb entities"; the composite, chains and `_has` after it: see "Searches
+through children"._
 
 ## A child over sqb entities (2026-11-23)
 
@@ -350,4 +351,47 @@ accepted, the Repository on the pool instead of the write's connection, the chil
 ### Not in this step
 
 A link with conditions of its own (`where`) or more than one hop, and parameters named by the
-entity's properties.
+entity's properties. _A link with conditions came later: see "Searches through children"._
+
+## Searches through children (2026-11-23)
+
+- **A composite on one row**: when the parts of a composite (`component-code-value-quantity`)
+  are parameters of a child (`child('components', ...)`), a value matches when one row of the
+  child matches every part: one EXISTS a child, each part's `where` on that row. Before, each
+  part was an EXISTS of its own, and an observation of 80/120 matched `8480-6$120` (the code on
+  one row, the value on another). Parts of the parent stay on its row; parts of two children
+  are an EXISTS each. `:missing` is the same: a row that has every part.
+- **Chains through a child's reference**: a `child(name, reference(fk, Target), where)`
+  parameter is followed by a chain (`Patient?general-practitioner.name=Smith`): EXISTS a row of
+  the child, within its `where`, whose `fk` is the id of a target that matches. Chains go on
+  from there (`Observation?subject.general-practitioner.name=...`).
+- **`_has` through a child's reference**: `Practitioner?_has:Patient:general-practitioner:...`
+  is EXISTS a patient one of whose child rows, within the `where`, refers to the practitioner.
+
+Tests (`packages/sql/test/sql-child-search.spec.ts`, 3, PostgreSQL): blood pressures in a
+components table (the same values on other rows, a row the `where` leaves out, a code and a
+value on two rows); a care team whose GPs are the rows of role `gp`, chained by one and two
+levels, and `_has` of one and two levels. Control runs, each caught (7): the parts on any rows,
+the parts' `where` dropped, `:missing` on any rows, no chain through a child, the child's
+`where` ignored, the foreign key read on the parent's row, no `_has` through a child.
+
+- **A link with conditions of its own**: `linked()` takes a `toMany` hop with `where`
+  (`Eq('kind', 'phone')`, or `{ kind: 'email' }`), so two links can share a table. Reads,
+  writes and deletes go through the Repository with the conditions ANDed to the foreign key, so
+  each link keeps to its own rows; a search joins the rows with the conditions as SQL of the
+  child's columns, which sqb writes (`prepareEntityFilter`, `@sqb/connect` 6.4.0, asked of
+  sqb for this) on an alias of its own that the search replaces. The rows a resource gives
+  meet the conditions themselves (`kind: 'phone'`): one that does not is not read back, and the
+  store refuses the resource. `@fhirjs/sql` needs sqb 6.4.0 or later.
+
+Tests (`packages/sql/test/sql-linked.spec.ts`, 1 more, PostgreSQL): phones and emails, two links
+over one contacts table (one condition an operator, one a plain object, a property named apart
+from its column): written, changed (the other link's row kept, with its id), searched (a
+parameter without a `where` of its own finds its link's rows only), refused, deleted. Control
+runs, each caught (5): reads, writes and deletes, or searches without the conditions; the
+alias not replaced; conditions refused.
+
+### Not in this step
+
+A link of more than one hop; parameters named by the entity's properties; children of
+children.

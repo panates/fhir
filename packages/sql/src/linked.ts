@@ -4,8 +4,12 @@
  * entities' own column names, types and transforms apply. For an
  * application that already describes its tables as sqb entities.
  */
-import { Eq, In } from '@sqb/builder';
-import { EntityMetadata, type Repository } from '@sqb/connect';
+import { And, Eq, In, Raw, Select } from '@sqb/builder';
+import {
+  EntityMetadata,
+  type Repository,
+  prepareEntityFilter,
+} from '@sqb/connect';
 import { FhirServerError } from '@fhirjs/server';
 import type { SqlChild } from './children.js';
 
@@ -26,7 +30,9 @@ export interface LinkedOptions {
   /**
    * The resource's rows, for writes: the child's properties but the
    * foreign key, null where the resource has no value. Without it, the
-   * child is only read.
+   * child is only read. A row of a link with conditions (`where`) gives
+   * the properties they ask for (`kind: 'phone'`): one that does not meet
+   * them is not read back, and the store refuses the resource.
    */
   rows?(resource: Row): Row[];
 }
@@ -41,16 +47,26 @@ interface Resolved {
   fkColumn: string;
   /** The child's primary key properties */
   primary: string[];
+  /** The link's own conditions (`where`), of the child's properties */
+  conditions: any[];
+  /** Their SQL on the alias ALIAS, for searches */
+  conditionSql?: string;
 }
+
+/** The alias the conditions' SQL is written on, replaced by a search's */
+const ALIAS = 'fhir_link__';
 
 const quoteKey = (row: Row, key: readonly string[]) =>
   JSON.stringify(key.map(k => (row[k] == null ? null : String(row[k]))));
 
 /**
  * The child of the parent entity's `@Link().toMany(...)` field `field`. The
- * link is one hop, without conditions of its own, from the parent's id
- * column (the table's `id`) to a column of the child. A parameter over its
- * rows names the child's columns, not its properties.
+ * link is one hop from the parent's id column (the table's `id`) to a
+ * column of the child, with conditions of its own or not (`where`): two
+ * links can share a table (`phones` where kind is phone, `emails` where it
+ * is email), each reading, writing and deleting its own rows only. A
+ * parameter over its rows names the child's columns, not its properties,
+ * and is limited by the link's conditions.
  */
 export function linked(
   parent: Ctor,
@@ -72,7 +88,10 @@ export function linked(
       );
     return db.repository(r().target);
   };
-  const ofParent = (parentId: string) => Eq(r().fkProperty, parentId);
+  /** The rows of a parent (or of parents), within the link's conditions */
+  const rowsOf = (fk: any) =>
+    r().conditions.length ? And(fk, ...r().conditions) : fk;
+  const ofParent = (parentId: string) => rowsOf(Eq(r().fkProperty, parentId));
   const create = (rep: Repository<any>, parentId: string, row: Row) =>
     rep.createOnly({ ...row, [r().fkProperty]: parentId });
 
@@ -86,9 +105,9 @@ export function linked(
           `linked(${parent.name}, ${field}): ${parent.name} is not an entity with a link ${field}`,
         );
       const a = link.association;
-      if (!a.returnsMany() || a.next || a.conditions?.length)
+      if (!a.returnsMany() || a.next)
         throw new TypeError(
-          `linked(${parent.name}, ${field}): the link must be one toMany hop without conditions`,
+          `linked(${parent.name}, ${field}): the link must be one toMany hop`,
         );
       const target = await a.resolveTarget();
       const fk = await a.resolveTargetProperty();
@@ -100,12 +119,27 @@ export function linked(
           `linked(${parent.name}, ${field}): ${target.name} needs a primary key to be written by a key`,
         );
       const table = target.tableName || target.name;
+      const qualified = target.schema ? `${target.schema}.${table}` : table;
+      const conditions = a.conditions ?? [];
+      // the conditions as SQL of the child's columns on an alias, as sqb
+      // writes them; a search puts its own alias in its place
+      let conditionSql: string | undefined;
+      if (conditions.length) {
+        const op = await prepareEntityFilter(target, conditions, ALIAS);
+        const { sql } = Select(Raw('1'))
+          .from(`${qualified} ${ALIAS}`)
+          .where(op)
+          .generate();
+        conditionSql = sql.slice(sql.indexOf(' where ') + 7);
+      }
       resolved = {
         target: target.ctor as Ctor,
-        table: target.schema ? `${target.schema}.${table}` : table,
+        table: qualified,
         fkProperty: fk.name,
         fkColumn: fk.fieldName,
         primary,
+        conditions,
+        conditionSql,
       };
     },
 
@@ -114,7 +148,7 @@ export function linked(
       if (!parentIds.length) return byParent;
       const { fkProperty } = r();
       const rows = await repo(db).findMany({
-        filter: In(fkProperty, parentIds),
+        filter: rowsOf(In(fkProperty, parentIds)),
         sort: [fkProperty, ...(options.sort ?? [])],
       });
       for (const row of rows as Row[]) {
@@ -126,10 +160,16 @@ export function linked(
       return byParent;
     },
 
-    join: (parentId, alias) => ({
-      table: r().table,
-      on: `${alias}.${r().fkColumn} = ${parentId}`,
-    }),
+    join: (parentId, alias) => {
+      const { table, fkColumn, conditionSql } = r();
+      const on = `${alias}.${fkColumn} = ${parentId}`;
+      return {
+        table,
+        on: conditionSql
+          ? `${on} and ${conditionSql.replaceAll(`${ALIAS}.`, `${alias}.`)}`
+          : on,
+      };
+    },
 
     write: options.rows
       ? async (parentId, resource, db) => {
