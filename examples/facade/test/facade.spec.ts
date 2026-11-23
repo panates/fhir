@@ -218,6 +218,17 @@ describe('examples/facade: an EMR in PostgreSQL behind a FHIR server', function 
       'Patient?email:missing=false',
       'Patient?address-city=ist',
       'Patient?address-city:missing=true',
+      'Patient?address-city=boston',
+      'Patient?address-city:exact=Boston',
+      'Patient?address-use=work',
+      'Patient?address-use=http://hl7.org/fhir/address-use|home',
+      'Patient?address-use:not=work',
+      'Patient?address=4%20office',
+      'Patient?address=tr&address-city=london',
+      'Patient?phone=%2B902120000001',
+      'Patient?phone=%2B905550000001,%2B902120000005',
+      'Patient?email:not=ali.1@example.org',
+      'Patient?email:missing=true&phone:missing=false',
       'Patient?name:missing=true',
       'Patient?name:missing=false',
       'Patient?given:missing=false',
@@ -237,6 +248,8 @@ describe('examples/facade: an EMR in PostgreSQL behind a FHIR server', function 
       'Patient?_sort=birthdate',
       'Patient?_sort=-birthdate,family',
       'Patient?_sort=family&_count=5&_offset=5',
+      'Patient?_sort=address-city,family',
+      'Patient?_sort=-address-city,family',
       'Observation?_sort=date&_count=10',
       'Observation?_sort=-date&_count=10',
       'Observation?_sort=-date&_count=7&_offset=14',
@@ -263,6 +276,9 @@ describe('examples/facade: an EMR in PostgreSQL behind a FHIR server', function 
       'Encounter?reason-code=http://hl7.org/fhir/sid/icd-10|E11.9',
       'Encounter?reason-code:missing=true',
       'Encounter?reason-code:not=I10',
+      'Encounter?reason-code=I10&reason-code=E11.9',
+      'Encounter?reason-code=J18.9,R07.4',
+      'Encounter?reason-code:missing=false&status=finished',
       'Encounter?identifier=ENC00001',
       'Encounter?date=2025',
       'Encounter?date=2025-01-05',
@@ -436,7 +452,9 @@ describe('examples/facade: writes to the EMR', function () {
       telecom: [{ system: 'email', value: 'deniz@example.org' }],
       gender: 'female',
       birthDate: '1995-04-01',
-      address: [{ line: ['1 Sea Road'], city: 'Izmir', country: 'TR' }],
+      address: [
+        { use: 'home', line: ['1 Sea Road'], city: 'Izmir', country: 'TR' },
+      ],
     };
     const created = await send('POST', 'Patient', patient);
     expect(created.status).toBe(201);
@@ -521,6 +539,129 @@ describe('examples/facade: writes to the EMR', function () {
     expect((await send('DELETE', `Encounter/${e.body.id}`)).status).toBe(204);
     expect((await send('DELETE', `Patient/${id}`)).status).toBe(204);
     expect((await send('GET', `Patient/${id}`)).status).toBe(404);
+  });
+
+  it('writes child rows by their key: kept rows keep their ids and the columns FHIR does not see', async () => {
+    const rows = async (sql: string) =>
+      (await client.execute(sql, { objectRows: true })).rows!;
+    const telecoms = () =>
+      rows(`select id::int, kind, value, rank, verified_at is not null as verified
+              from patient_telecoms where patient_id = 1 order by rank`);
+    const before = await telecoms();
+    expect(before.map(t => [t.kind, t.value, t.rank, t.verified])).toEqual([
+      ['phone', '+905550000001', 0, true],
+      ['email', 'ali.1@example.org', 1, true],
+      ['phone', '+902120000001', 2, true],
+    ]);
+    const p = (await send('GET', 'Patient/1')).body;
+    expect(p.address.map((a: any) => a.use)).toEqual(['home', 'work']);
+
+    // the phones swapped, the email changed, the work address gone
+    const changed = {
+      ...p,
+      telecom: [
+        { system: 'phone', value: '+902120000001' },
+        { system: 'email', value: 'ali@example.org' },
+        { system: 'phone', value: '+905550000001' },
+      ],
+      address: [{ ...p.address[0], city: 'Izmir' }],
+    };
+    const w = await send('PUT', 'Patient/1', changed);
+    expect(w.status).toBe(200);
+    expect(withoutMeta(w.body)).toEqual(withoutMeta(changed));
+    const after = await telecoms();
+    expect(after.map(t => [t.id, t.kind, t.value, t.rank, t.verified])).toEqual(
+      [
+        [before[2].id, 'phone', '+902120000001', 0, true],
+        [after[1].id, 'email', 'ali@example.org', 1, false],
+        [before[0].id, 'phone', '+905550000001', 2, true],
+      ],
+    );
+    expect(after[1].id).not.toBe(before[1].id);
+    expect(
+      await rows(
+        'select kind, city from patient_addresses where patient_id = 1',
+      ),
+    ).toEqual([{ kind: 'home', city: 'Izmir' }]);
+    expect(
+      (await send('GET', 'Patient?address-city=izmir&phone=%2B902120000001'))
+        .body.total,
+    ).toBe(1);
+
+    // an encounter's diagnoses: the main one changed, then one removed
+    const diagnoses = () =>
+      rows(`select id::int, code, rank from encounter_diagnoses
+             where encounter_id = 3 order by rank`);
+    const d0 = await diagnoses();
+    expect(d0.map(d => [d.code, d.rank])).toEqual([
+      ['E11.9', 1],
+      ['J18.9', 2],
+    ]);
+    const e = (await send('GET', 'Encounter/3')).body;
+    const swapped = { ...e, reasonCode: [...e.reasonCode].reverse() };
+    expect((await send('PUT', 'Encounter/3', swapped)).status).toBe(200);
+    expect((await diagnoses()).map(d => [d.id, d.code, d.rank])).toEqual([
+      [d0[1].id, 'J18.9', 1],
+      [d0[0].id, 'E11.9', 2],
+    ]);
+    const one = { ...e, reasonCode: [e.reasonCode[1]] };
+    expect((await send('PUT', 'Encounter/3', one)).status).toBe(200);
+    expect((await diagnoses()).map(d => [d.id, d.code])).toEqual([
+      [d0[1].id, 'J18.9'],
+    ]);
+
+    // refused, and nothing of them written
+    const current = (await send('GET', 'Patient/1')).body;
+    expect([
+      await refusal('PUT', 'Patient/1', {
+        ...current,
+        telecom: [current.telecom[0], current.telecom[0]],
+      }),
+      await refusal('PUT', 'Patient/1', {
+        ...current,
+        address: [
+          current.address[0],
+          { ...current.address[0], city: 'Ankara' },
+        ],
+      }),
+      await refusal('PUT', 'Patient/1', {
+        ...current,
+        telecom: [{ ...current.telecom[0], use: 'mobile' }],
+      }),
+      await refusal('PUT', 'Patient/1', {
+        ...current,
+        address: [{ ...current.address[0], use: 'temp' }],
+      }),
+      await refusal('PUT', 'Patient/1', {
+        ...current,
+        address: [{ ...current.address[0], line: ['1 Road', 'Flat 2'] }],
+      }),
+    ]).toEqual([
+      '422 The Patient has two elements the database cannot tell apart',
+      '422 The Patient has two addresses of the same use',
+      '422 The Patient has elements the database does not keep: Patient.telecom[0]',
+      '422 The database refused a value of the Patient',
+      '422 The Patient has elements the database does not keep: Patient.address[0]',
+    ]);
+    expect((await send('GET', 'Patient/1')).body).toEqual(current);
+    expect(await telecoms()).toEqual(after);
+
+    // a patient deleted with its rows: telecoms by the store, addresses by the cascade
+    const created = await send('POST', 'Patient', {
+      resourceType: 'Patient',
+      identifier: [{ system: 'urn:example:mrn', value: 'MRN9100' }],
+      name: [{ family: 'Kurt', given: ['Ece'] }],
+      telecom: [{ system: 'phone', value: '+905559999999' }],
+      gender: 'female',
+      address: [{ use: 'work', city: 'Ankara' }],
+    });
+    expect(created.status).toBe(201);
+    const id = created.body.id;
+    expect((await send('DELETE', `Patient/${id}`)).status).toBe(204);
+    expect(
+      await rows(`select (select count(*) from patient_telecoms where patient_id = ${id})::int as t,
+                         (select count(*) from patient_addresses where patient_id = ${id})::int as a`),
+    ).toEqual([{ t: 0, a: 0 }]);
   });
 
   it('runs a transaction Bundle in one database transaction', async () => {

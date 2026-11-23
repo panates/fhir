@@ -7,7 +7,10 @@
 
 export interface Rows {
   patients: Record<string, unknown>[];
+  patient_telecoms: Record<string, unknown>[];
+  patient_addresses: Record<string, unknown>[];
   encounters: Record<string, unknown>[];
+  encounter_diagnoses: Record<string, unknown>[];
   lab_tests: Record<string, unknown>[];
   lab_results: Record<string, unknown>[];
 }
@@ -44,6 +47,8 @@ export function seedRows(): Rows {
   const lasts = ['Smith', 'Johnson', 'Demir', 'Garcia', 'Smithson', 'Kaya'];
   const cities = ['Istanbul', 'Ankara', 'Izmir', 'London', 'Boston'];
   const patients: Record<string, unknown>[] = [];
+  const patient_telecoms: Record<string, unknown>[] = [];
+  const patient_addresses: Record<string, unknown>[] = [];
   for (let i = 0; i < 20; i++) {
     const [first, middle, last, gender, birth] =
       named[i] ??
@@ -64,20 +69,51 @@ export function seedRows(): Rows {
       gender,
       birth_date: birth,
       deceased_at: n === 6 ? '2020-06-01T10:00:00.000Z' : null,
-      phone: n % 3 === 0 ? null : `+90555000${String(n).padStart(4, '0')}`,
-      email: n % 5 === 0 ? null : `${first.toLowerCase()}.${n}@example.org`,
-      address_line: `${n} Main Street`,
-      city: n % 7 === 0 ? null : cities[n % cities.length],
-      postal_code: String(34000 + n),
-      country: n % 2 ? 'TR' : 'GB',
       active: n !== 8,
       updated_at: hours('2026-01-01T00:00:00.000Z', n * 5),
     });
+    // telecoms in the order the patient gave them: none, one, or a phone, an
+    // email and a second phone; some verified, which FHIR does not see
+    const telecoms: [string, string][] = [];
+    if (n % 3 !== 0)
+      telecoms.push(['phone', `+90555000${String(n).padStart(4, '0')}`]);
+    if (n % 5 !== 0)
+      telecoms.push(['email', `${first.toLowerCase()}.${n}@example.org`]);
+    if (n % 4 === 1)
+      telecoms.push(['phone', `+90212000${String(n).padStart(4, '0')}`]);
+    if (n % 6 === 2) telecoms.reverse();
+    telecoms.forEach(([kind, value], rank) =>
+      patient_telecoms.push({
+        patient_id: n,
+        kind,
+        value,
+        rank,
+        verified_at: n % 2 ? '2025-06-01T00:00:00.000Z' : null,
+      }),
+    );
+    patient_addresses.push({
+      patient_id: n,
+      kind: 'home',
+      line: `${n} Main Street`,
+      city: n % 7 === 0 ? null : cities[n % cities.length],
+      postal_code: String(34000 + n),
+      country: n % 2 ? 'TR' : 'GB',
+    });
+    if (n % 3 === 1)
+      patient_addresses.push({
+        patient_id: n,
+        kind: 'work',
+        line: n % 9 === 1 ? null : `${n} Office Park`,
+        city: cities[(n + 2) % cities.length],
+        postal_code: null,
+        country: 'TR',
+      });
   }
 
   const kinds = ['inpatient', 'outpatient', 'emergency'];
   const departments = ['Cardiology', 'Internal Medicine', 'Emergency'];
   const encounters: Record<string, unknown>[] = [];
+  const encounter_diagnoses: Record<string, unknown>[] = [];
   for (let i = 0; i < 40; i++) {
     const n = i + 1;
     const patient = (i % 20) + 1;
@@ -108,9 +144,18 @@ export function seedRows(): Rows {
           : null,
       department: departments[i % 3],
       physician: `Dr. ${pick(lasts)}`,
-      diagnosis_code: pick(['I10', 'E11.9', 'J18.9', 'R07.4', null]),
       updated_at: hours('2026-02-01T00:00:00.000Z', n * 3),
     });
+    // none, one or two diagnoses, the main one first
+    const codes = ['I10', 'E11.9', 'J18.9', 'R07.4'];
+    const first = pick([...codes, null]);
+    if (first) {
+      const diagnoses = [first];
+      if (n % 3 === 0) diagnoses.push(codes[(codes.indexOf(first) + 1) % 4]);
+      diagnoses.forEach((code, i) =>
+        encounter_diagnoses.push({ encounter_id: n, code, rank: i + 1 }),
+      );
+    }
   }
 
   const lab_tests = [
@@ -167,5 +212,13 @@ export function seedRows(): Rows {
       updated_at: hours('2026-03-01T00:00:00.000Z', i + 1),
     });
   }
-  return { patients, encounters, lab_tests, lab_results };
+  return {
+    patients,
+    patient_telecoms,
+    patient_addresses,
+    encounters,
+    encounter_diagnoses,
+    lab_tests,
+    lab_results,
+  };
 }

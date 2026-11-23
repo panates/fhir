@@ -6,6 +6,8 @@
 import type { SqbClient } from '@sqb/connect';
 import {
   SqlStore,
+  child,
+  childTable,
   code,
   composite,
   constant,
@@ -29,6 +31,8 @@ import {
   MRN,
   NATIONAL_ID,
   UCUM,
+  diagnosisColumns,
+  diagnosisRows,
   encounterColumns,
   encounterOf,
   encounterRow,
@@ -38,7 +42,10 @@ import {
   patientColumns,
   patientOf,
   patientRow,
+  telecomColumns,
+  telecomRows,
 } from './mapping.js';
+import { addresses } from './addresses.js';
 
 export interface EmrStoreOptions {
   /** An sqb client of the EMR's database */
@@ -56,6 +63,17 @@ export class EmrStore extends SqlStore {
           select: patientColumns,
           resource: patientOf,
           row: patientRow,
+          children: {
+            telecoms: childTable({
+              table: 'patient_telecoms',
+              fk: 'patient_id',
+              select: telecomColumns,
+              order: a => `${a}.rank`,
+              key: ['kind', 'value'],
+              rows: telecomRows,
+            }),
+            addresses,
+          },
           params: {
             identifier: token(
               code('mrn', { system: MRN }),
@@ -70,9 +88,23 @@ export class EmrStore extends SqlStore {
               code('active', { map: { true: 'true', false: 'false' } }),
             ),
             // a ContactPoint's value is found with or without its system
-            phone: token(code('phone'), code('phone', { system: 'phone' })),
-            email: token(code('email'), code('email', { system: 'email' })),
-            'address-city': string('city'),
+            phone: child(
+              'telecoms',
+              token(code('value'), code('value', { system: 'phone' })),
+              a => `${a}.kind = 'phone'`,
+            ),
+            email: child(
+              'telecoms',
+              token(code('value'), code('value', { system: 'email' })),
+              a => `${a}.kind = 'email'`,
+            ),
+            address: child(
+              'addresses',
+              string('line', 'city', 'postal_code', 'country'),
+            ),
+            'address-city': child('addresses', string('city')),
+            // a code: no system, as the memory store matches it
+            'address-use': child('addresses', token(code('kind'))),
             deceased: token(
               code(
                 a =>
@@ -80,7 +112,7 @@ export class EmrStore extends SqlStore {
               ),
             ),
           },
-          sort: ['family', 'birthdate'],
+          sort: ['family', 'birthdate', 'address-city'],
         },
         Encounter: {
           table: 'encounters',
@@ -88,6 +120,16 @@ export class EmrStore extends SqlStore {
           select: encounterColumns,
           resource: encounterOf,
           row: encounterRow,
+          children: {
+            diagnoses: childTable({
+              table: 'encounter_diagnoses',
+              fk: 'encounter_id',
+              select: diagnosisColumns,
+              order: a => `${a}.rank`,
+              key: ['code'],
+              rows: diagnosisRows,
+            }),
+          },
           params: {
             identifier: token(
               code('encounter_no', { system: 'urn:example:encounter' }),
@@ -102,7 +144,10 @@ export class EmrStore extends SqlStore {
               }),
             ),
             date: date(period('admitted_at', 'discharged_at')),
-            'reason-code': token(code('diagnosis_code', { system: ICD10 })),
+            'reason-code': child(
+              'diagnoses',
+              token(code('code', { system: ICD10 })),
+            ),
           },
           sort: ['date'],
         },

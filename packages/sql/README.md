@@ -89,5 +89,32 @@ column has versions (ETag, If-Match); the versionId is the milliseconds of that 
 database's refusals are answered as FHIR does: a unique key or a row still referred to 409, a
 value the table refuses 422.
 
+## Child tables
+
+Rows of a resource in tables of their own are its `children`, each an `SqlChild`: the store asks
+it for the rows of a page at once, joins it for searches and hands it the resource to write.
+`childTable()` is one over a table with a foreign key to the parent, written by a key (a kept row
+keeps its id); any other shape is an `SqlChild` of the application's own SQL.
+
+```ts
+Patient: {
+  table: 'patients',
+  select: patientColumns,
+  resource: (row, children) => ({ /* ..., */ telecom: children.telecoms.map(...) }),
+  children: {
+    telecoms: childTable({
+      table: 'patient_telecoms', fk: 'patient_id',
+      select: a => `${a}.kind, ${a}.value`, order: a => `${a}.rank`,
+      key: ['kind', 'value'], rows: telecomRows,
+    }),
+    addresses, // an SqlChild of its own SQL
+  },
+  params: {
+    phone: child('telecoms', token(code('value')), a => `${a}.kind = 'phone'`),
+    'address-city': child('addresses', string('city')),
+  },
+}
+```
+
 [`examples/facade`](../../examples/facade) describes an EMR's tables this way, and the design is
 in [`docs/decisions/sql-facade.md`](../../docs/decisions/sql-facade.md).
