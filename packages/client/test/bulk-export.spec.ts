@@ -74,12 +74,20 @@ async function serverWith(
     store?: FhirStore;
     storage?: ExportStorage;
     maxExports?: number;
+    /** Provenance served too */
+    provenance?: boolean;
   } = {},
 ) {
   const server = new FhirServer({
     fhir,
     store: options.store ?? new MemoryStore(),
-    resources: ['Patient', 'Observation', 'Medication', 'Group'],
+    resources: [
+      'Patient',
+      'Observation',
+      'Medication',
+      'Group',
+      ...(options.provenance ? ['Provenance'] : []),
+    ],
     base: '/fhir',
     bulkExport: {
       storage: options.storage ?? new MemoryExportStorage(),
@@ -191,9 +199,11 @@ describe('FhirClient.bulkExport()', () => {
       Observation: ['o1', 'o3'],
       Patient: ['p1'],
     });
-    // the memory store's clock may run a little ahead: past it, then a change
-    await new Promise(resolve => setTimeout(resolve, 30));
-    const since = new Date();
+    // after the set-up's last write, by the store's clock (it runs ahead of
+    // the server's), then a change
+    const since = new Date(
+      (await (await c.request('GET', 'Group/g1')).json()).meta.lastUpdated,
+    );
     await c.request('PUT', 'Observation/o3', {
       body: JSON.stringify({ ...obs('o3', 'p1'), status: 'amended' }),
     });
@@ -212,13 +222,11 @@ describe('FhirClient.bulkExport()', () => {
     expect((await patients.wait()).request).toBe(
       `${BASE}/Patient/$export?_type=Patient`,
     );
-    const e = await c
-      .bulkExport({ params: { includeAssociatedData: 'x' } })
-      .catch(x => x);
+    const e = await c.bulkExport({ params: { nope: 'x' } }).catch(x => x);
     expect(e).toBeInstanceOf(FhirClientError);
     expect([e.status, e.diagnostics]).toEqual([
       400,
-      ['$export: includeAssociatedData is not supported'],
+      ['$export: nope is not supported'],
     ]);
     await expect(c.bulkExport({ level: { group: '../x' } })).rejects.toThrow(
       '"../x" is not a FHIR id',
@@ -288,6 +296,82 @@ describe('FhirClient.bulkExport()', () => {
     expect([e.constructor.name, e.status]).toEqual(['FhirClientError', 429]);
     release();
     await busy.server.bulkExport!.idle();
+  });
+
+  it('names the patients in a POST; asks for the Provenance of the resources', async () => {
+    const { fetch, sent } = await serverWith({ provenance: true });
+    const c = client(fetch);
+    const job = await c.bulkExport({
+      level: 'patient',
+      types: ['Patient', 'Observation'],
+      patients: ['Patient/p2'],
+    });
+    const kickOff = sent.find(r => r.url.endsWith('/Patient/$export'))!;
+    expect([kickOff.method, kickOff.headers.get('Content-Type')]).toEqual([
+      'POST',
+      'application/fhir+json',
+    ]);
+    expect(await kickOff.json()).toEqual({
+      resourceType: 'Parameters',
+      parameter: [
+        { name: '_type', valueString: 'Patient,Observation' },
+        { name: 'patient', valueReference: { reference: 'Patient/p2' } },
+      ],
+    });
+    expect(idsByType(await collect(job.resources(await job.wait())))).toEqual({
+      Observation: ['o2'],
+      Patient: ['p2'],
+    });
+    const e = await c
+      .bulkExport({ level: { group: 'g1' }, patients: ['Patient/p2'] })
+      .catch(x => x);
+    expect([e.status, e.diagnostics]).toEqual([
+      400,
+      ['Patient/p2 is not a member of Group/g1'],
+    ]);
+    await expect(c.bulkExport({ patients: ['Patient/p1'] })).rejects.toThrow(
+      'patients are for the patients or a group',
+    );
+
+    for (const [id, recorded] of [
+      ['pv1', '2026-01-01T00:00:00Z'],
+      ['pv2', '2026-02-01T00:00:00Z'],
+    ])
+      await (
+        await c.request('PUT', `Provenance/${id}`, {
+          body: JSON.stringify({
+            resourceType: 'Provenance',
+            id,
+            recorded,
+            target: [{ reference: 'Observation/o1' }],
+            agent: [{ who: { reference: 'Practitioner/x' } }],
+          }),
+        })
+      ).body?.cancel();
+    const latest = await c.bulkExport({
+      types: ['Observation'],
+      includeAssociatedData: ['LatestProvenanceResources'],
+    });
+    expect(sent.at(-1)!.url).toBe(
+      `${BASE}/$export?_type=Observation&includeAssociatedData=LatestProvenanceResources`,
+    );
+    expect(
+      idsByType(await collect(latest.resources(await latest.wait()))),
+    ).toEqual({ Observation: ['o1', 'o2', 'o3'], Provenance: ['pv2'] });
+    // with patients, in the POST's Parameters
+    const both = await c.bulkExport({
+      level: 'patient',
+      types: ['Observation'],
+      patients: ['Patient/p1'],
+      includeAssociatedData: ['RelevantProvenanceResources'],
+    });
+    expect((await sent.at(-1)!.json()).parameter).toContainEqual({
+      name: 'includeAssociatedData',
+      valueCode: 'RelevantProvenanceResources',
+    });
+    expect(idsByType(await collect(both.resources(await both.wait())))).toEqual(
+      { Observation: ['o1', 'o3'], Provenance: ['pv1', 'pv2'] },
+    );
   });
 
   it('reports its progress while it runs; a cancel stops it', async () => {

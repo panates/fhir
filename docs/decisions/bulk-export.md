@@ -68,8 +68,8 @@ parameters accepted, a type asked and not allowed left out, a file name not chec
 
 ## Not in this step
 
-`_typeFilter`, `_elements`, `includeAssociatedData` and the `patient` parameter of a POST; a
-queue and workers apart from the server; a limit on exports at once (429); `$export` in the
+`_typeFilter`, `_elements`, `includeAssociatedData` and the `patient` parameter of a POST (all
+four came later); a queue and workers apart from the server; a limit on exports at once (429); `$export` in the
 client (`respond-async` and the manifest); deleted resources (`_since` lists only current ones).
 _The client's side came next: see "The client"; `_typeFilter`, `_elements`, deleted resources
 and the limit after it: see "Filters, parts, deletions and a limit"._
@@ -132,3 +132,36 @@ not checked.
   kick-off is a `FhirClientError` with its status.
 
 Tests: server 4 more (13), client 1 more (7).
+
+## The patients of a POST, and their Provenance (2026-11-23)
+
+- **`patient`** (a POST's `valueReference`; refused in a GET and at the server's level, even with
+  `lenient`, since left out it would export more): the export of the patients or of a group is
+  of these patients only. `Patient/123`, or absolute under the server's base. A patient not
+  known to the caller (read as the caller: a `patient/` scope knows its own only), or not a
+  member of the group, is refused (400, an issue each); with `lenient` it is left out, with an
+  OperationOutcome in the error files. The types are searched as for a group: by a parameter
+  of the patient.
+- **`includeAssociatedData`**: `RelevantProvenanceResources` gives every Provenance whose
+  `target` is a resource written, `LatestProvenanceResources` the one recorded last of each
+  (`recorded`); both asked, the first (the least restrictive). The Provenance is searched a
+  page of resources at a time, by `target` a hundred at a time, as the caller (its criteria),
+  each written once, in `Provenance-1.ndjson` ... of `fileSize`. Provenance is then not
+  exported as a type too; asked in `_type` with it, it is refused. A value of its own (`_x`),
+  Provenance not searched by `target`, or not allowed to the caller is refused (400, 403), or
+  left out with `lenient`, with an OperationOutcome.
+- **References absolute under the base**: the export's searches now get the server's base, so
+  a reference written `http://host/fhir/Patient/1` is found as `Patient/1`, as in a search. A
+  group export missed such resources before.
+- **The client**: `patients` (the kick-off is then a POST of a Parameters resource, as the IG
+  takes it), `includeAssociatedData`.
+
+Tests: server 2 more (15), client 1 more (8); two tests that took `_since` from the wall clock
+take it from the store's (`MemoryStore`'s runs ahead), as they failed now and then. Control
+runs, each caught (23): `patient` ignored, a group's members not narrowed, unknown patients
+accepted or not checked, `patient` in a GET or at the server's level, a patient of another
+server, `valueReference` not read, the notes not written; the Provenance ignored, the latest
+as all, the most restrictive of both, Provenance written twice (as a type, or of two
+resources), a code of its own accepted, Provenance not authorized, its files not split, the
+latest by order; searches without the base; the client's `patients` not sent or sent in a GET,
+`includeAssociatedData` not sent or not a `valueCode`.

@@ -67,6 +67,10 @@ export interface ExportJob {
   filters?: Record<string, string[]>;
   /** _elements, as asked */
   elements?: string[];
+  /** The patients of `patient` (a POST's), known: the export is of them only */
+  patients?: string[];
+  /** includeAssociatedData: the Provenance of the resources exported, the latest or all */
+  associated?: 'latest' | 'relevant';
   /** The type being exported: 'Observation (3 of 5)' */
   progress?: string;
   output: ExportFile[];
@@ -143,6 +147,7 @@ export interface ExportHost {
     type: string,
     query: string,
     context: FhirRequestContext,
+    baseUrl: string,
   ): Promise<void>;
   /**
    * _elements read for the types exported: 400 for an element no type has,
@@ -173,13 +178,17 @@ export interface ExportHost {
     id: string,
     context: FhirRequestContext,
   ): Promise<boolean>;
-  /** A page of a search, with the authorizer's criteria */
+  /**
+   * A page of a search, with the authorizer's criteria; `baseUrl` is the
+   * server's, for references absolute under it
+   */
   search(
     type: string,
     params: URLSearchParams,
     count: number,
     offset: number,
     context: FhirRequestContext,
+    baseUrl: string,
   ): Promise<{ items: StoredResource[]; total?: number }>;
   /** A resource, for a Group's members; undefined when not there or not served */
   read(
@@ -199,13 +208,19 @@ const SUPPORTED = new Set([
   '_type',
   '_typeFilter',
   '_elements',
+  'patient',
+  'includeAssociatedData',
 ]);
+const LATEST = 'LatestProvenanceResources';
+const RELEVANT = 'RelevantProvenanceResources';
 /** Ids in one search of a group's patients */
 const BATCH = 100;
 
 /** The exports this process runs: their caller, and whether they were cancelled */
 interface Running {
   context: FhirRequestContext;
+  /** The server's base URL, as the kick-off came */
+  baseUrl: string;
   cancelled: boolean;
   done?: Promise<void>;
 }
@@ -270,6 +285,66 @@ export class BulkExport {
         `$export: _since ${since} is not an instant`,
         'value',
       );
+    const host = this._host;
+    // notes for the error files: what was left out, and why
+    const notes: { type?: string; why: string }[] = [];
+
+    // patient: the patients of the export, by a POST's references; those not
+    // known (or not in the group) are refused, or left out when lenient
+    const asks = params.getAll('patient');
+    let patients: string[] | undefined;
+    if (asks.length) {
+      // left out, any of these would export more than was asked
+      if (level === 'system')
+        throw new FhirServerError(
+          400,
+          '$export: patient is for the export of the patients or a group',
+          'not-supported',
+        );
+      if (request.method.toUpperCase() !== 'POST')
+        throw new FhirServerError(
+          400,
+          '$export: patient is taken in a POST only',
+          'not-supported',
+        );
+      const ids = asks.map(ref => {
+        const m = /(?:^|\/)Patient\/([A-Za-z0-9\-.]{1,64})$/.exec(ref);
+        if (!m || (ref.includes('://') && !ref.startsWith(`${baseUrl}/`)))
+          throw new FhirServerError(
+            400,
+            `$export: patient ${ref} is not a reference to a Patient of this server`,
+            'value',
+          );
+        return m[1];
+      });
+      const members =
+        level === 'group'
+          ? new Set((await this._members(group!, context)) ?? [])
+          : undefined;
+      const unknown: string[] = [];
+      patients = [];
+      for (const id of [...new Set(ids)])
+        if (members ? members.has(id) : await host.read('Patient', id, context))
+          patients.push(id);
+        else unknown.push(id);
+      const why = (id: string) =>
+        members
+          ? `Patient/${id} is not a member of Group/${group}`
+          : `Patient/${id} is not known`;
+      if (unknown.length && !lenient)
+        throw new FhirServerError(
+          400,
+          `$export: ${unknown.map(why).join('; ')}`,
+          'not-found',
+          unknown.map(id => ({
+            severity: 'error',
+            code: 'not-found',
+            diagnostics: why(id),
+          })),
+        );
+      for (const id of unknown) notes.push({ why: why(id) });
+    }
+
     const asked = params
       .getAll('_type')
       .flatMap(t => t.split(','))
@@ -277,7 +352,6 @@ export class BulkExport {
       .filter(Boolean);
 
     // the types: those asked, or every one of the level
-    const host = this._host;
     const ofLevel =
       level === 'system'
         ? host.searchable()
@@ -287,7 +361,6 @@ export class BulkExport {
               t => t === 'Patient' || host.compartmentParams(t).length > 0,
             );
     const types: string[] = [];
-    const leftOut: { type: string; why: string }[] = [];
     for (const type of asked.length ? [...new Set(asked)] : ofLevel) {
       let why: string | undefined;
       if (!ofLevel.includes(type))
@@ -298,7 +371,7 @@ export class BulkExport {
       else if (since !== undefined && !host.hasParam(type, '_lastUpdated'))
         why = `${type} cannot be searched by _lastUpdated, which _since needs`;
       else if (
-        level === 'group' &&
+        (level === 'group' || patients) &&
         type !== 'Patient' &&
         !host.compartmentParams(type).some(p => host.hasParam(type, p))
       )
@@ -318,10 +391,67 @@ export class BulkExport {
       if (why) {
         if (asked.length)
           throw new FhirServerError(400, `$export: ${why}`, 'not-supported');
-        leftOut.push({ type, why });
+        notes.push({ type, why });
         continue;
       }
       types.push(type);
+    }
+
+    // includeAssociatedData: the Provenance of what is exported; the least
+    // restrictive of the values asked
+    const codes = params
+      .getAll('includeAssociatedData')
+      .flatMap(v => v.split(','))
+      .map(v => v.trim())
+      .filter(Boolean);
+    let associated: ExportJob['associated'];
+    if (codes.length) {
+      for (const code of codes)
+        if (code !== LATEST && code !== RELEVANT) {
+          const why = `includeAssociatedData ${code} is not supported; ${LATEST} and ${RELEVANT} are`;
+          if (!lenient)
+            throw new FhirServerError(400, `$export: ${why}`, 'not-supported');
+          notes.push({ why });
+        }
+      if (codes.includes(RELEVANT)) associated = 'relevant';
+      else if (codes.includes(LATEST)) associated = 'latest';
+    }
+    if (associated) {
+      let why: string | undefined;
+      if (!host.hasParam('Provenance', 'target'))
+        why = 'Provenance is not served, or not searched by target';
+      else {
+        const d = await host.authorize(context.principal, 'Provenance');
+        if (!d.allowed) {
+          if (!lenient)
+            throw new FhirServerError(
+              403,
+              d.reason ?? 'Export of Provenance is not allowed',
+              'forbidden',
+            );
+          why = 'Provenance is not allowed to the caller';
+        }
+      }
+      if (why) {
+        if (!lenient)
+          throw new FhirServerError(
+            400,
+            `$export: includeAssociatedData: ${why}`,
+            'not-supported',
+          );
+        notes.push({ why: `includeAssociatedData: ${why}` });
+        associated = undefined;
+      }
+    }
+    if (associated && types.includes('Provenance')) {
+      // the Provenance of the export is what includeAssociatedData says
+      if (asked.includes('Provenance'))
+        throw new FhirServerError(
+          400,
+          '$export: Provenance comes with includeAssociatedData; it is not asked in _type too',
+          'not-supported',
+        );
+      types.splice(types.indexOf('Provenance'), 1);
     }
 
     // _typeFilter: Type?query, repeated or split at a comma before the next type
@@ -338,7 +468,7 @@ export class BulkExport {
         const [, type, query] = m;
         if (!types.includes(type)) {
           // left out already, with its reason in the error files
-          if (leftOut.some(l => l.type === type) || lenient) continue;
+          if (notes.some(l => l.type === type) || lenient) continue;
           throw new FhirServerError(
             400,
             `$export: _typeFilter ${f}: ${type} is not exported`,
@@ -347,7 +477,7 @@ export class BulkExport {
         }
         // a query the server cannot apply is refused, lenient or not: left
         // out, it would export more than was asked
-        await host.filter(type, query, context);
+        await host.filter(type, query, context, baseUrl);
         (filters[type] ??= []).push(query);
       }
     const elements = params
@@ -355,7 +485,12 @@ export class BulkExport {
       .flatMap(v => v.split(','))
       .map(v => v.trim())
       .filter(Boolean);
-    if (elements.length) host.subset(elements, types, !lenient);
+    if (elements.length)
+      host.subset(
+        elements,
+        associated ? [...types, 'Provenance'] : types,
+        !lenient,
+      );
 
     const max = this.options.maxExports;
     if (max !== undefined && this._running.size >= max)
@@ -390,6 +525,8 @@ export class BulkExport {
       since,
       filters: Object.keys(filters).length ? filters : undefined,
       elements: elements.length ? elements : undefined,
+      patients,
+      associated,
       output: [],
       error: [],
       // deleted resources: the history of a type says which, not whose
@@ -397,9 +534,9 @@ export class BulkExport {
       deleted: level === 'system' && since !== undefined ? [] : undefined,
     };
     await this._jobs.put(job);
-    const running: Running = { context, cancelled: false };
+    const running: Running = { context, baseUrl, cancelled: false };
     this._running.set(job.id, running);
-    running.done = this._run(job, running, leftOut).finally(() => {
+    running.done = this._run(job, running, notes).finally(() => {
       this._running.delete(job.id);
     });
     return new Response(null, {
@@ -544,13 +681,20 @@ export class BulkExport {
   private async _run(
     job: ExportJob,
     running: Running,
-    leftOut: { type: string; why: string }[],
+    notes: { type?: string; why: string }[],
   ): Promise<void> {
     const storage = this.options.storage;
+    const fileSize = this.options.fileSize ?? 10_000;
+    const provenance = job.associated
+      ? {
+          files: new TypeFiles(job, storage, 'Provenance', fileSize),
+          seen: new Set<string>(),
+        }
+      : undefined;
     try {
-      if (leftOut.length) {
+      if (notes.length) {
         const w = await storage.create(job.id, 'OperationOutcome-1.ndjson');
-        for (const { why } of leftOut)
+        for (const { why } of notes)
           await w.write(
             JSON.stringify({
               resourceType: 'OperationOutcome',
@@ -567,23 +711,32 @@ export class BulkExport {
         job.error.push({
           type: 'OperationOutcome',
           file: 'OperationOutcome-1.ndjson',
-          count: leftOut.length,
+          count: notes.length,
         });
       }
-      const members =
+      let members =
         job.level === 'group'
           ? ((await this._members(job.group!, running.context)) ?? [])
           : undefined;
+      if (job.patients)
+        members = members
+          ? members.filter(id => job.patients!.includes(id))
+          : job.patients;
       const subset = job.elements
-        ? this._host.subset(job.elements, job.types, false)
+        ? this._host.subset(
+            job.elements,
+            job.associated ? [...job.types, 'Provenance'] : job.types,
+            false,
+          )
         : undefined;
       for (const [i, type] of job.types.entries()) {
         if (running.cancelled) break;
         job.progress = `${type} (${i + 1} of ${job.types.length})`;
         await this._jobs.put(job);
-        await this._type(job, running, type, members, subset);
+        await this._type(job, running, type, members, subset, provenance);
         if (job.deleted) await this._deleted(job, running, type);
       }
+      await provenance?.files.close();
       if (running.cancelled) {
         await this._remove(job.id);
         return;
@@ -597,6 +750,8 @@ export class BulkExport {
       job.status = 'failed';
       job.failure =
         e instanceof FhirServerError ? e.message : 'an error of the server';
+    } finally {
+      await provenance?.files.close();
     }
     job.progress = undefined;
     job.ended = new Date().toISOString();
@@ -610,34 +765,27 @@ export class BulkExport {
     type: string,
     members: string[] | undefined,
     subset: Subset | undefined,
+    provenance: Provenances | undefined,
   ): Promise<void> {
     const host = this._host;
-    const storage = this.options.storage;
-    const fileSize = this.options.fileSize ?? 10_000;
-    const pageSize = this.options.pageSize ?? 500;
-    let writer: ExportWriter | undefined;
-    let current: ExportFile | undefined;
+    const files = new TypeFiles(
+      job,
+      this.options.storage,
+      type,
+      this.options.fileSize ?? 10_000,
+    );
     // _typeFilter's queries, any of which a resource matches
     const queries = job.filters?.[type] ?? [''];
     // a resource found by more than one search is written once
     const seen = members || queries.length > 1 ? new Set<string>() : undefined;
+    /** Writes a resource; false when written already */
     const write = async (s: StoredResource) => {
       if (seen) {
-        if (seen.has(s.id)) return;
+        if (seen.has(s.id)) return false;
         seen.add(s.id);
       }
-      if (!writer || current!.count === fileSize) {
-        await writer?.close();
-        current = {
-          type,
-          file: `${type}-${job.output.filter(f => f.type === type).length + 1}.ndjson`,
-          count: 0,
-        };
-        writer = await storage.create(job.id, current.file);
-        job.output.push(current);
-      }
-      await writer.write(JSON.stringify(host.json(s, subset)));
-      current!.count++;
+      await files.write(JSON.stringify(host.json(s, subset)));
+      return true;
     };
 
     // the searches: every resource, or those of the group's patients
@@ -671,26 +819,85 @@ export class BulkExport {
     }
 
     try {
-      for (const params of searches) {
-        for (let offset = 0; ; offset += pageSize) {
-          if (running.cancelled) return;
-          const page = await host.search(
-            type,
-            params,
-            pageSize,
-            offset,
-            running.context,
-          );
-          for (const s of page.items) if (s.resource) await write(s);
-          if (
-            page.items.length < pageSize ||
-            (page.total !== undefined && offset + pageSize >= page.total)
-          )
-            break;
-        }
-      }
+      for (const params of searches)
+        await this._pages(type, params, running, async items => {
+          const written: string[] = [];
+          for (const s of items)
+            if (s.resource && (await write(s))) written.push(`${type}/${s.id}`);
+          if (provenance && written.length)
+            await this._provenance(job, running, written, provenance, subset);
+        });
     } finally {
-      await writer?.close();
+      await files.close();
+    }
+  }
+
+  /** The pages of a search, to their end or a cancel */
+  private async _pages(
+    type: string,
+    params: URLSearchParams,
+    running: Running,
+    each: (items: StoredResource[]) => Promise<void>,
+  ): Promise<void> {
+    const pageSize = this.options.pageSize ?? 500;
+    for (let offset = 0; ; offset += pageSize) {
+      if (running.cancelled) return;
+      const page = await this._host.search(
+        type,
+        params,
+        pageSize,
+        offset,
+        running.context,
+        running.baseUrl,
+      );
+      await each(page.items);
+      if (
+        page.items.length < pageSize ||
+        (page.total !== undefined && offset + pageSize >= page.total)
+      )
+        return;
+    }
+  }
+
+  /**
+   * includeAssociatedData: the Provenance whose target is one of the
+   * resources written, each once; for 'latest', the one recorded last of
+   * each resource
+   */
+  private async _provenance(
+    job: ExportJob,
+    running: Running,
+    refs: string[],
+    provenance: Provenances,
+    subset: Subset | undefined,
+  ): Promise<void> {
+    for (let i = 0; i < refs.length; i += BATCH) {
+      const batch = refs.slice(i, i + BATCH);
+      const found: StoredResource[] = [];
+      await this._pages(
+        'Provenance',
+        new URLSearchParams({ target: batch.join(',') }),
+        running,
+        async items => void found.push(...items.filter(s => s.resource)),
+      );
+      let chosen = found;
+      if (job.associated === 'latest') {
+        const latest = new Map<string, StoredResource>();
+        for (const s of found)
+          for (const ref of targets(s.resource!))
+            if (batch.includes(ref)) {
+              const had = latest.get(ref);
+              if (!had || recorded(s) > recorded(had)) latest.set(ref, s);
+            }
+        chosen = found.filter(s => [...latest.values()].includes(s));
+      }
+      for (const s of chosen) {
+        if (provenance.seen.has(s.id)) continue;
+        provenance.seen.add(s.id);
+        await provenance.files.write(
+          JSON.stringify(this._host.json(s, subset)),
+        );
+      }
     }
   }
 
@@ -778,10 +985,17 @@ async function exportParams(
       'structure',
     );
   for (const p of body.parameter ?? []) {
-    const value = Object.entries(p).find(([k]) => k.startsWith('value'))?.[1];
+    const value: any = Object.entries(p).find(([k]) =>
+      k.startsWith('value'),
+    )?.[1];
     params.append(
       p.name,
-      typeof value === 'string' ? value : JSON.stringify(value),
+      typeof value === 'string'
+        ? value
+        : // patient's valueReference: the reference
+          typeof value?.reference === 'string'
+          ? value.reference
+          : JSON.stringify(value),
     );
   }
   return params;
@@ -899,4 +1113,65 @@ function safe(name: string): string {
   if (!/^[A-Za-z0-9\-._]+$/.test(name) || name.startsWith('.'))
     throw new FhirServerError(404, `No file ${name}`, 'not-found');
   return name;
+}
+
+/** includeAssociatedData's Provenance: its files, and those written */
+interface Provenances {
+  files: TypeFiles;
+  seen: Set<string>;
+}
+
+/** A type's files of an export, of `size` resources at most: Observation-1.ndjson ... */
+class TypeFiles {
+  private _writer?: ExportWriter;
+  private _current?: ExportFile;
+
+  constructor(
+    private readonly _job: ExportJob,
+    private readonly _storage: ExportStorage,
+    readonly type: string,
+    private readonly _size: number,
+  ) {}
+
+  async write(line: string): Promise<void> {
+    if (!this._writer || this._current!.count === this._size) {
+      await this._writer?.close();
+      const n = this._job.output.filter(f => f.type === this.type).length + 1;
+      this._current = {
+        type: this.type,
+        file: `${this.type}-${n}.ndjson`,
+        count: 0,
+      };
+      this._writer = await this._storage.create(
+        this._job.id,
+        this._current.file,
+      );
+      this._job.output.push(this._current);
+    }
+    await this._writer.write(line);
+    this._current!.count++;
+  }
+
+  async close(): Promise<void> {
+    const w = this._writer;
+    this._writer = undefined;
+    await w?.close();
+  }
+}
+
+/** The references of a Provenance's targets, relative: 'Observation/1' */
+function targets(p: Record<string, any>): string[] {
+  return (p.target ?? [])
+    .map((t: any) =>
+      /([A-Za-z]+\/[A-Za-z0-9\-.]{1,64})(?:\/_history\/[^/]+)?$/.exec(
+        t?.reference ?? '',
+      ),
+    )
+    .filter(Boolean)
+    .map((m: RegExpExecArray) => m[1]);
+}
+
+/** When a Provenance was recorded, to find the latest */
+function recorded(s: StoredResource): number {
+  return Date.parse(s.resource?.recorded ?? s.lastUpdated ?? '') || 0;
 }

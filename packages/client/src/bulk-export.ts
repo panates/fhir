@@ -21,6 +21,15 @@ export interface FhirBulkExportOptions extends FhirRequestOptions {
   typeFilters?: Record<string, string | readonly string[]>;
   /** _elements: these elements only (`id`, `Patient.name`), and those every resource must have */
   elements?: readonly string[];
+  /**
+   * patient: these patients only (`Patient/123`), of the patients or a
+   * group; the kick-off is then a POST, as the IG takes it
+   */
+  patients?: readonly string[];
+  /** includeAssociatedData: the Provenance of the resources, the latest of each or all */
+  includeAssociatedData?: readonly (
+    'LatestProvenanceResources' | 'RelevantProvenanceResources' | (string & {})
+  )[];
   /** More kick-off parameters (includeAssociatedData ...), as the server takes them */
   params?: Record<string, string | readonly string[]>;
 }
@@ -218,7 +227,37 @@ export class FhirBulkExport {
   }
 }
 
-/** The kick-off's path and parameters */
+/**
+ * The kick-off: a GET of its path and parameters, or, with `patients`, a
+ * POST of a Parameters resource
+ */
+export function exportRequest(options: FhirBulkExportOptions): {
+  method: 'GET' | 'POST';
+  path: string;
+  body?: Record<string, any>;
+} {
+  if (!options.patients?.length)
+    return { method: 'GET', path: exportPath(options) };
+  if ((options.level ?? 'system') === 'system')
+    throw new TypeError('patients are for the patients or a group');
+  const [path, query] = exportPath(options).split('?');
+  const parameter: Record<string, any>[] = [];
+  for (const [name, value] of new URLSearchParams(query))
+    parameter.push(
+      name === 'includeAssociatedData'
+        ? { name, valueCode: value }
+        : { name, valueString: value },
+    );
+  for (const reference of options.patients)
+    parameter.push({ name: 'patient', valueReference: { reference } });
+  return {
+    method: 'POST',
+    path,
+    body: { resourceType: 'Parameters', parameter },
+  };
+}
+
+/** The kick-off's path and parameters, for a GET */
 export function exportPath(options: FhirBulkExportOptions): string {
   const level = options.level ?? 'system';
   let path: string;
@@ -242,6 +281,8 @@ export function exportPath(options: FhirBulkExportOptions): string {
     for (const query of typeof queries === 'string' ? [queries] : queries)
       q.append('_typeFilter', `${type}?${query}`);
   if (options.elements?.length) q.set('_elements', options.elements.join(','));
+  if (options.includeAssociatedData?.length)
+    q.set('includeAssociatedData', options.includeAssociatedData.join(','));
   for (const [k, v] of Object.entries(options.params ?? {}))
     for (const x of typeof v === 'string' ? [v] : v) q.append(k, x);
   return q.size ? `${path}?${q}` : path;

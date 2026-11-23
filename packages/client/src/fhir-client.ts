@@ -7,7 +7,7 @@ import {
 import {
   FhirBulkExport,
   type FhirBulkExportOptions,
-  exportPath,
+  exportRequest,
 } from './bulk-export.js';
 import { FhirClientError } from './fhir-client-error.js';
 import { type FhirSearchParams, toSearchParams } from './search-params.js';
@@ -403,10 +403,26 @@ export class FhirClient {
   async bulkExport(
     options: FhirBulkExportOptions = {},
   ): Promise<FhirBulkExport> {
-    const { level: _l, types: _t, since: _s, params: _p, ...request } = options;
-    const r = await this.request('GET', exportPath(options), {
+    const {
+      level: _l,
+      types: _t,
+      since: _s,
+      typeFilters: _f,
+      elements: _e,
+      patients: _pa,
+      includeAssociatedData: _a,
+      params: _p,
+      ...request
+    } = options;
+    const kickOff = exportRequest(options);
+    const r = await this.request(kickOff.method, kickOff.path, {
       ...request,
-      headers: { ...request.headers, Prefer: 'respond-async' },
+      headers: {
+        ...request.headers,
+        Prefer: 'respond-async',
+        ...(kickOff.body && { 'Content-Type': 'application/fhir+json' }),
+      },
+      ...(kickOff.body && { body: JSON.stringify(kickOff.body) }),
     });
     await r.body?.cancel();
     const status = r.headers.get('Content-Location');
