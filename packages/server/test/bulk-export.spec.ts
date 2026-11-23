@@ -133,14 +133,31 @@ async function setUp(
   const kickOff = async (
     path: string,
     headers: Record<string, string> = {},
+    /** The parameters of a POST */
+    parameter?: Record<string, any>[],
   ) => {
-    const r = await send('GET', path, { ...async, ...headers });
+    const r = parameter
+      ? await send(
+          'POST',
+          path,
+          {
+            ...async,
+            'Content-Type': 'application/fhir+json',
+            ...headers,
+          },
+          { resourceType: 'Parameters', parameter },
+        )
+      : await send('GET', path, { ...async, ...headers });
     expect([r.status, await r.text()]).toEqual([202, '']);
     return r.headers.get('Content-Location')!;
   };
   /** An export run to its end: its manifest, and its files' resources by url */
-  const run = async (path: string, headers: Record<string, string> = {}) => {
-    const status = await kickOff(path, headers);
+  const run = async (
+    path: string,
+    headers: Record<string, string> = {},
+    parameter?: Record<string, any>[],
+  ) => {
+    const status = await kickOff(path, headers, parameter);
     await server.bulkExport!.idle();
     const r = await send('GET', status, headers);
     expect(r.status).toBe(200);
@@ -257,8 +274,10 @@ describe('Bulk Data export', () => {
       Encounter: ['e1'],
       Patient: ['p1', 'p2'].concat('p3'),
     });
-    await new Promise(resolve => setTimeout(resolve, 5));
-    const since = new Date().toISOString();
+    // after the set-up's last write, by the store's clock: MemoryStore's
+    // runs ahead of the server's, and a wall-clock instant was flaky
+    const since = (await (await send('GET', 'Group/g1')).json()).meta
+      .lastUpdated;
     await send(
       'PUT',
       'Observation/o2',
@@ -335,7 +354,7 @@ describe('Bulk Data export', () => {
       send('GET', path, { Prefer: prefer }).then(refusal);
     expect([
       await go('$export', ''),
-      await go('$export?includeAssociatedData=LatestProvenanceResources'),
+      await go('$export?nope=1'),
       await go('$export?_outputFormat=text/csv'),
       await go('$export?_since=yesterday'),
       await go('$export?_type=Nope'),
@@ -349,7 +368,7 @@ describe('Bulk Data export', () => {
       await go('$export-file/nope/Patient-1.ndjson'),
     ]).toEqual([
       '400 $export is asynchronous: it needs Prefer: respond-async',
-      '400 $export: includeAssociatedData is not supported',
+      '400 $export: nope is not supported',
       '400 $export: _outputFormat text/csv is not supported; application/fhir+ndjson is',
       '400 $export: _since yesterday is not an instant',
       '400 $export: Nope is not served, or not searched',
@@ -493,6 +512,215 @@ describe('Bulk Data export', () => {
         .flat()
         .every(x => !x.meta.tag),
     ).toBe(true);
+  });
+
+  it('exports the patients a POST names (patient), of the patients or a group', async () => {
+    const { send, run, ids } = await setUp({ secure: true });
+    const system = {
+      'X-Test-Principal': JSON.stringify({ scopes: 'system/*.rs' }),
+    };
+    const patient = (...refs: string[]) =>
+      refs.map(r => ({ name: 'patient', valueReference: { reference: r } }));
+    // p2: o4 is p2's by subject (p1's by performer)
+    expect(
+      ids((await run('Patient/$export', system, patient('Patient/p2'))).files),
+    ).toEqual({ Observation: ['o2', 'o4'], Patient: ['p2'] });
+    expect(
+      ids(
+        (
+          await run(
+            'Patient/$export',
+            system,
+            patient(`${BASE}/Patient/p3`, 'Patient/p2'),
+          )
+        ).files,
+      ),
+    ).toEqual({ Observation: ['o2', 'o4'], Patient: ['p2', 'p3'] });
+    // of a group: its members asked
+    expect(
+      ids((await run('Group/g1/$export', system, patient('Patient/p1'))).files),
+    ).toEqual({
+      Encounter: ['e1'],
+      Group: ['g1'],
+      Observation: ['o1', 'o3', 'o4', 'o5'],
+      Patient: ['p1'],
+    });
+
+    const post = (
+      path: string,
+      parameter: Record<string, any>[],
+      headers: Record<string, string> = {},
+    ) =>
+      send(
+        'POST',
+        path,
+        {
+          Prefer: 'respond-async',
+          'Content-Type': 'application/fhir+json',
+          ...system,
+          ...headers,
+        },
+        { resourceType: 'Parameters', parameter },
+      ).then(refusal);
+    expect([
+      await post('Patient/$export', patient('Patient/p9', 'Patient/p1')),
+      await post('Group/g1/$export', patient('Patient/p2')),
+      await post('$export', patient('Patient/p1')),
+      await post('Patient/$export', patient('Observation/o1')),
+      await post('Patient/$export', patient('http://elsewhere/Patient/p1')),
+      await send('GET', 'Patient/$export?patient=Patient/p1', {
+        Prefer: 'respond-async',
+        ...system,
+      }).then(refusal),
+      // a patient the caller may not read is not known to it
+      await post('Patient/$export', patient('Patient/p2'), {
+        'X-Test-Principal': JSON.stringify({
+          subject: 'p',
+          scopes: 'patient/*.rs',
+          patient: 'p1',
+        }),
+      }),
+    ]).toEqual([
+      '400 Patient/p9 is not known',
+      '400 Patient/p2 is not a member of Group/g1',
+      '400 $export: patient is for the export of the patients or a group',
+      '400 $export: patient Observation/o1 is not a reference to a Patient of this server',
+      '400 $export: patient http://elsewhere/Patient/p1 is not a reference to a Patient of this server',
+      '400 $export: patient is taken in a POST only',
+      '400 Patient/p2 is not known',
+    ]);
+    // lenient: those not known are left out, and said so in the error files
+    const lenient = await run(
+      'Patient/$export',
+      { ...system, Prefer: 'respond-async, handling=lenient' },
+      patient('Patient/p9', 'Patient/p3'),
+    );
+    const files = Object.values(lenient.files).flat();
+    expect(ids(lenient.files)).toEqual({ Patient: ['p3'] });
+    expect(
+      files
+        .filter(r => r.resourceType === 'OperationOutcome')
+        .map(o => o.issue[0].diagnostics),
+    ).toEqual(['Patient/p9 is not known']);
+    const none = await run(
+      'Group/g1/$export',
+      { ...system, Prefer: 'respond-async, handling=lenient' },
+      patient('Patient/p2'),
+    );
+    expect(ids(none.files)).toEqual({});
+  });
+
+  it('exports the Provenance of the resources exported (includeAssociatedData)', async () => {
+    const { send, run, ids } = await setUp({ secure: true });
+    const system = {
+      'X-Test-Principal': JSON.stringify({ scopes: 'system/*.cruds' }),
+    };
+    const provenance = (id: string, recorded: string, ...target: string[]) =>
+      send(
+        'PUT',
+        `Provenance/${id}`,
+        { 'Content-Type': 'application/fhir+json', ...system },
+        {
+          resourceType: 'Provenance',
+          id,
+          recorded,
+          target: target.map(reference => ({ reference })),
+          agent: [{ who: { reference: 'Practitioner/x' } }],
+        },
+      ).then(r => expect(r.status).toBe(201));
+    await provenance('pv1', '2026-01-01T00:00:00Z', 'Observation/o1');
+    await provenance('pv2', '2026-02-01T00:00:00Z', 'Observation/o1');
+    await provenance(
+      'pv3',
+      '2026-01-15T00:00:00Z',
+      'Observation/o2',
+      `${BASE}/Patient/p1`,
+    );
+    await provenance('pv4', '2026-01-01T00:00:00Z', 'Medication/m1');
+    const go = async (path: string, headers = system) =>
+      ids((await run(path, headers)).files).Provenance;
+    const types = '_type=Observation,Patient';
+    // all of the resources exported, each once (pv3 of o2 and p1)
+    expect(
+      await go(
+        `$export?${types}&includeAssociatedData=RelevantProvenanceResources`,
+      ),
+    ).toEqual(['pv1', 'pv2', 'pv3']);
+    // the latest of each: o1's pv2, o2's and p1's pv3
+    expect(
+      await go(
+        `$export?${types}&includeAssociatedData=LatestProvenanceResources`,
+      ),
+    ).toEqual(['pv2', 'pv3']);
+    // both: the least restrictive
+    expect(
+      await go(
+        `$export?${types}&includeAssociatedData=LatestProvenanceResources,RelevantProvenanceResources`,
+      ),
+    ).toEqual(['pv1', 'pv2', 'pv3']);
+    // every type: Provenance comes as includeAssociatedData says, not as a type too
+    const all = await run(
+      '$export?includeAssociatedData=LatestProvenanceResources',
+      system,
+    );
+    expect(ids(all.files).Provenance).toEqual(['pv2', 'pv3', 'pv4']);
+    // a group: of its patient's resources
+    expect(
+      await go(
+        'Group/g1/$export?includeAssociatedData=RelevantProvenanceResources',
+      ),
+    ).toEqual(['pv1', 'pv2', 'pv3']);
+    // in files of fileSize (3)
+    const r = await run(
+      '$export?includeAssociatedData=RelevantProvenanceResources',
+      system,
+    );
+    expect(
+      r.manifest.output
+        .filter((f: any) => f.type === 'Provenance')
+        .map((f: any) => [f.url.split('/').pop(), f.count]),
+    ).toEqual([
+      ['Provenance-1.ndjson', 3],
+      ['Provenance-2.ndjson', 1],
+    ]);
+
+    const refused = (q: string, headers: Record<string, string> = system) =>
+      send('GET', `$export?${q}`, {
+        Prefer: 'respond-async',
+        ...headers,
+      }).then(refusal);
+    const obsOnly = {
+      'X-Test-Principal': JSON.stringify({ scopes: 'system/Observation.rs' }),
+    };
+    expect([
+      await refused('includeAssociatedData=_mine'),
+      await refused(
+        '_type=Provenance&includeAssociatedData=RelevantProvenanceResources',
+      ),
+      await refused(
+        '_type=Observation&includeAssociatedData=RelevantProvenanceResources',
+        obsOnly,
+      ),
+    ]).toEqual([
+      '400 $export: includeAssociatedData _mine is not supported; LatestProvenanceResources and RelevantProvenanceResources are',
+      '400 $export: Provenance comes with includeAssociatedData; it is not asked in _type too',
+      '403 The scopes do not grant s on Provenance',
+    ]);
+    // lenient: left out, and said so
+    const lenient = await run(
+      '$export?_type=Observation&includeAssociatedData=RelevantProvenanceResources,_mine',
+      { ...obsOnly, Prefer: 'respond-async, handling=lenient' },
+    );
+    expect(ids(lenient.files).Provenance).toBe(undefined);
+    expect(
+      Object.values(lenient.files)
+        .flat()
+        .filter(x => x.resourceType === 'OperationOutcome')
+        .map(o => o.issue[0].diagnostics),
+    ).toEqual([
+      'includeAssociatedData _mine is not supported; LatestProvenanceResources and RelevantProvenanceResources are',
+      'includeAssociatedData: Provenance is not allowed to the caller',
+    ]);
   });
 
   it('lists the resources deleted since _since, for the export of the server', async () => {

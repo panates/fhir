@@ -129,7 +129,7 @@ restricts it further.
 files: a kick-off with `Prefer: respond-async` answers 202 and a status URL, which answers 202
 until the manifest of the files. The export runs in the server's process through the store's
 search, a page at a time, as the caller of the kick-off. It takes `_type`, `_since`,
-`_typeFilter` and `_elements`, lists the resources deleted since `_since` in an export of the
+`_typeFilter`, `_elements`, a POST's `patient` and `includeAssociatedData` (Provenance), lists the resources deleted since `_since` in an export of the
 server, and runs `maxExports` at once (429 past it).
 
 ```ts

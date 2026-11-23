@@ -64,7 +64,8 @@ const manifest = await job.wait({ onProgress: p => console.log(p) });
 for await (const resource of job.resources(manifest)) save(resource);
 ```
 
-`typeFilters` and `elements` send `_typeFilter` and `_elements`; `deleted(manifest)` gives the
+`typeFilters`, `elements`, `patients` (a POST) and `includeAssociatedData` send the IG's
+parameters; `deleted(manifest)` gives the
 resources deleted since `since`, when the server lists them.
 
 ## Documentation

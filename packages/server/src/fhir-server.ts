@@ -2035,7 +2035,7 @@ export class FhirServer {
       compartmentParams: type =>
         this.fhir.model.compartmentParams('Patient', type) ?? [],
       authorize: decision,
-      search: async (type, params, count, offset, context) => {
+      search: async (type, params, count, offset, context, baseUrl) => {
         const served = searchable(type)!;
         const d = await decision(context.principal, type);
         if (!d.allowed)
@@ -2048,14 +2048,14 @@ export class FhirServer {
         if (d.criteria)
           for (const [k, v] of new URLSearchParams(d.criteria))
             all.append(k, v);
-        const { query } = this._query(all, type, served, '', true);
+        const { query } = this._query(all, type, served, baseUrl, true);
         // a chain of _typeFilter goes through the authorizer, as in a search
         await this._authorizeChains({ context } as Exchange, query.criteria);
         query.count = count;
         query.offset = offset;
         return served.store.search!(type, query, context);
       },
-      filter: async (type, q, context) => {
+      filter: async (type, q, context, baseUrl) => {
         const params = new URLSearchParams(q);
         for (const name of params.keys())
           if (RESULT_PARAMS.has(name.split(':')[0]))
@@ -2066,7 +2066,13 @@ export class FhirServer {
             );
         let query: SearchQuery;
         try {
-          query = this._query(params, type, searchable(type)!, '', true).query;
+          query = this._query(
+            params,
+            type,
+            searchable(type)!,
+            baseUrl,
+            true,
+          ).query;
         } catch (e) {
           if (e instanceof FhirServerError)
             throw new FhirServerError(
