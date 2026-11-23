@@ -53,6 +53,17 @@ const backend = new SmartBackendServices({
 const client = new FhirClient({ baseUrl, fhir, interceptors: [bearerToken(backend.provider)] });
 ```
 
+### Bulk Data export
+
+`bulkExport()` starts an export on the server, `wait()` asks its status as the server's
+Retry-After says, and `resources()` reads its files as resources, a line at a time:
+
+```ts
+const job = await client.bulkExport({ level: { group: 'ward-3' }, types: ['Patient', 'Observation'] });
+const manifest = await job.wait({ onProgress: p => console.log(p) });
+for await (const resource of job.resources(manifest)) save(resource);
+```
+
 ## Documentation
 
 [The design of the library](https://github.com/panates/fhir/blob/main/docs/design/decorator-model.md)

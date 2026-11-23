@@ -71,3 +71,34 @@ parameters accepted, a type asked and not allowed left out, a file name not chec
 `_typeFilter`, `_elements`, `includeAssociatedData` and the `patient` parameter of a POST; a
 queue and workers apart from the server; a limit on exports at once (429); `$export` in the
 client (`respond-async` and the manifest); deleted resources (`_since` lists only current ones).
+_The client's side came next: see "The client"._
+
+## The client (2026-11-23)
+
+`FhirClient.bulkExport({ level, types, since, params })` (`packages/client/src/bulk-export.ts`)
+starts an export with `Prefer: respond-async` and gives a `FhirBulkExport`: `status()`, `wait()`
+until the manifest, `cancel()`, and `resources(manifest, { types })` and `errors(manifest)`, which
+read the files a line at a time as they come and decode each line with the client's codec.
+
+- **The wait** follows the server's `Retry-After` (seconds or a date), capped by `maxInterval`
+  (60 s); `interval` (2 s) when the server gives none. A 429 of a status asked too often is a
+  wait, not an error. `onProgress` gets each `X-Progress`; an `AbortSignal` stops the wait.
+- **The files**: when the manifest says `requiresAccessToken`, a file is read through the client
+  (its interceptors and token), and only on its server: a URL elsewhere is refused, so the token
+  goes nowhere else. Otherwise (a storage's signed URLs) it is read with a plain fetch, without
+  the token.
+- **The kick-off** is a GET; other parameters (`_typeFilter` ...) go in `params`, as the server
+  takes them. The server's refusal is a `FhirClientError` with its OperationOutcome.
+
+Tests (`packages/client/test/bulk-export.spec.ts`, 6), against `@fhirjs/server`'s `$export`
+through the client's `fetch`: the flow and the files as instances of the model's classes, the
+order of the types, Retry-After followed and not the interval; a group, `_since`, the patients, a
+refusal, a bad group id; the progress while it runs and a cancel; the token on every request,
+the error files of types not granted, another caller (404) and none (401), a file elsewhere
+refused; a storage's signed URLs read without the token; a 429, Retry-After as a date and capped,
+an abort, lines split across chunks and a last line without a newline.
+
+Control runs, each caught: no `respond-async`, Retry-After not capped, Retry-After ignored, a 429
+as an error, a signed URL read with the token, a line split across chunks dropped, the last line
+dropped, `types` ignored, `_since` not sent, an abort ignored, `X-Progress` not read, a group id
+not checked.
