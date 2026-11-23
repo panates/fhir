@@ -19,7 +19,7 @@ the work and what is open are in [`docs/HANDOVER.md`](docs/HANDOVER.md).
 | `packages/server` | `@fhirjs/server` | REST server: a fetch-style handler over stores per resource type ([design](docs/decisions/server.md)) |
 | `packages/smart` | `@fhirjs/smart` | JWT verification (JWK Sets, key rotation) and SMART scopes, for the client and the server. No dependency |
 | `support/` | | `build-models.mts` (the generator), `fetch-packages.mts`, benchmarks |
-| `examples/` | | A profile example (`pnpm examples`) |
+| `examples/` | | A profile example (`pnpm examples`); a facade store over an EMR in PostgreSQL (`examples/facade`, tested with `FHIR_PG_URL`) |
 
 ## Commands
 
@@ -41,7 +41,8 @@ a feature branch: open a pull request to get a run.
 ## Rules and traps
 
 - **Run `pnpm fetch-packages` before you measure.** Without it the tests that need the HL7
-  packages are skipped, and the test count is not the real one (335 with them).
+  packages are skipped, and the test count is not the real one (335 with them; 341 when
+  `FHIR_PG_URL` names a PostgreSQL database for the facade example, as in CI).
 - **Tag a slow test `#slow`** at the end of its title: one that runs over every example of a
   version or takes about a second or more. CI runs the tagged tests in a second job, in parallel
   and without coverage (`mocha --grep '#slow'`), and the others with `--invert`. Ten are tagged;

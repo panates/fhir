@@ -162,9 +162,10 @@ new FhirServer({
 - **Reads:** each mapped resource is valid against R4, and a read gives what the mapping gives.
 - **Refusals:** a parameter the store does not name, `:text`, a write (405).
 - **PostgreSQL:** the tests make a schema of their own (`facade_<random>`), seed it and drop it.
-  They read the connection from `FHIR_PG_URL`, by default `postgres://postgres@localhost:5432`,
-  and skip when no database answers, as the tests that need the HL7 packages do. CI's `test` job
-  gets a `postgres` service, as sqb's own CI has.
+  They read the connection from `FHIR_PG_URL` and skip without it, as the tests that need the
+  HL7 packages do. (Changed while building: no default address, so that no test writes to a
+  database that happens to answer on the default port.) CI's `test` job gets a `postgres`
+  service, as sqb's own CI has.
 - **Control runs** as for the other steps: a prefix ignored, `:not` dropping nulls, a chain
   without its condition, the composite on two rows; tests must fail each time.
 
@@ -174,6 +175,66 @@ The point of the example is what a helper would take over. Notes kept while buil
 "Built" section here: which translators were the same for every table (a token over a code
 column, a date over a period), what the mapping needed that a declarative table description
 cannot say, and what sqb lacked, if anything (reported to its maintainers, not worked around).
+
+## Built (2026-11-23)
+
+`examples/facade`: `schema.sql`, `seed.ts` (20 patients, 40 encounters, 5 tests, 200 results,
+the same on every run), `mapping.ts` (rows to resources), `sql-search.ts` (the translators),
+`emr-store.ts` (`EmrStore`), `db.ts` (a schema of its own, made and seeded), and
+`test/facade.spec.ts`. sqb 6.3.6 (`@sqb/builder`, `@sqb/connect`, `@sqb/postgres`) as dev
+dependencies of the repository.
+
+- **Every row maps to a valid R4 resource**, and 118 searches give the same resources, in the
+  same order, on the facade and on the same resources matched by FHIRPath: each parameter,
+  modifier and prefix named above, chains of one and two links, `_has` nested, the composite,
+  `_sort`, paging, `_include` and `_revinclude`.
+- **Left out, waiting for sqb** (below): Encounter `date` and `_sort=date` (a period of two
+  columns), and `:missing` on a parameter over two columns (`identifier`, `name`, `given`) and on
+  `code-value-quantity`. They answer 400 ("not supported yet"); nothing works around the bug.
+- **Refused by the store (400):** `:text`, the prefix `ap` of a date (it depends on the time of
+  the search), a write (405 from the server: the store declares read and search only).
+
+### What the helper would take over
+
+- **The translators were the same for every table**: a token over code columns (with a code map,
+  a system, or a constant), a string over text columns, a date over an instant, a date or a
+  period, a quantity over a number and a unit, a reference over a foreign key. `sql-search.ts`
+  holds them; the tables name them per parameter in a few lines each (`emr-store.ts`). A table
+  description could name them as data, with two exceptions met here: a value computed in SQL
+  (`deceased`, from whether `deceased_at` is null) and a column in another table (the test's
+  name, by a subquery). An expression where a column goes covers both.
+- **Chains and `_has` need only the foreign keys** (`refs`): an `EXISTS` on the target's table,
+  its criteria translated by the same code, nested to any depth.
+- **The meaning of a parameter had to be followed closely**, and the comparison tests found what
+  reading the specification did not: a ContactPoint is found with or without its system
+  (`phone=phone|x`), a primitive code is never found with a system
+  (`gender=http://hl7.org/fhir/administrative-gender|male` finds nothing, as on the memory
+  store), `:not` keeps the rows without a value (so each comparison checks its column is there
+  first), a date's `gt` compares the end of the row's range and `lt` its start, and the order of
+  `_sort` is that of the normalized strings (`collate "C"` on `lower(unaccent())`).
+- **Values go as parameters**, never in the SQL text: sqb writes a `Date` literal without its
+  milliseconds. A query's parameters are copied for each execution.
+- **The store does not know the server's base URL**: an absolute reference
+  (`subject=http://host/fhir/Patient/1`) cannot be told local, so the facade finds nothing for
+  it, where the memory store, given the base, finds the patient. A helper would want the base in
+  `SearchQuery` or in the request context.
+
+### Found in sqb (6.3.6), to report
+
+With `strictParams`, which `SqbConnection.execute()` always sets, two `IS NULL` / `IS NOT NULL`
+tests directly in one `AND` or `OR` add a parameter the SQL does not use:
+
+```ts
+Select('x').from('t')
+  .where(Or(IsNot('a', null), IsNot('c', null)), Gt('b', Param('p0')))
+  .generate({ dialect: 'postgres', params: { p0: 1 }, strictParams: true });
+// sql: select x from t where (a is not null or c is not null) and b > $2
+// params: [null, 1]
+```
+
+PostgreSQL refuses it ("could not determine data type of parameter $1"). One test alone, or each
+inside its own `AND`, is written right. To be reported to sqb's maintainers; Encounter `date`
+and the `:missing` above come in when it is fixed.
 
 ## Not in this step
 

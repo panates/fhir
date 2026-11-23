@@ -33,6 +33,21 @@ jobs:
       !contains(github.event.head_commit.message, 'no-test')
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # PostgreSQL for the facade example (examples/facade): its tests make a schema of their own
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      FHIR_PG_URL: postgres://postgres@localhost:5432/postgres
     steps:
       # Checks the repository out and installs what the lockfile pins
       - name: Setup Environment
