@@ -193,4 +193,62 @@ references to other servers keep their `url`, and the SQL store finds nothing fo
 
 Writes (create, update, delete) and the mapping back from a resource to rows, history and
 versions, transactions, a terminology server, other databases than PostgreSQL (the dialect object
-leaves room), and generating a description from a database's catalog.
+leaves room), and generating a description from a database's catalog. _Writes, versions of the
+current row and transactions came next: see "Writes"._
+
+## Writes (2026-11-23)
+
+### Decided
+
+| Question              | Decision                                                                                                           | Why                                                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| The mapping back      | A function of the table, `row(resource, db)`, to its columns: the inverse of `resource(row)`                       | The mapping is code in both directions (codes of the EMR's own, a name in three columns); no language of its own.         |
+| An element not kept   | Refused (422) twice: first by `row()` (`onlyElements()`), then by the store, which reads the row back and compares | [`server.md`](server.md): a facade refuses what it cannot keep rather than drop it. The second check needs no table code. |
+| Versions and If-Match | `versions: 'current'` for a table that is written and names `lastUpdated` as a column; `'none'` otherwise          | The column is there in most EMRs; no change to the schema. A table without it keeps no version.                           |
+| Transactions          | `transaction()`: one connection, `BEGIN`, the view's reads and writes on it, `COMMIT` or `ROLLBACK`                | A transaction Bundle over the existing tables is all or nothing, as the server asks of a store.                           |
+
+### Built
+
+- **`row(resource, db)`** gives every column it maps, null where the resource has no value (an
+  update replaces the resource); `db.rows(sql, params)` runs SQL in the write's transaction, for a
+  code kept in a table of its own. Without `row()`, a type is read-only (405 from the server).
+  Helpers: `onlyElements(resource, names)` refuses a top-level element without a column,
+  `referenceId(ref, type)` gives the id of `Type/id` and refuses anything else, `decimalValue(v)`
+  gives a decimal's text (`13.40`) for a numeric column.
+- **Every write is a database transaction**: the row locked (`select ... for update`), If-Match
+  checked, `INSERT ... RETURNING` the id or `UPDATE`, then the row read back with `resource()`.
+  An element of the written resource that is not in the one read back fails the write (422,
+  rolled back), with its path: `Patient.name[0]`, `Observation.code.coding[0]`. Instants are
+  compared as times (`+03:00` is kept as the same instant in UTC), decimals as numbers, the items
+  of an array in any order; the read resource may have more (a display from a catalogue).
+- **Versions**: the store sets the `lastUpdated` column on every write; the versionId is its
+  milliseconds since 1970, read with every row, also in searches. An update takes at least the
+  current version plus one, so two writes within a millisecond are two versions.
+- **The database's refusals** become the client's answer, without the database's names: a unique
+  key 409, a row still referred to on delete 409, a foreign key to no row 422, a null, a check or
+  a value of the wrong form 422. The SQLSTATEs are read by the dialect (`refusal()`).
+- **The ids are the database's** (`acceptsIds` is not declared, nor `updateCreate`), so a
+  transaction cannot refer to a new resource by its fullUrl; the server refuses it (400).
+- **`examples/facade` writes** Patient, Encounter and Observation (`patientRow`, `encounterRow`,
+  `observationRow` in `mapping.ts`). Every one of its 260 seed rows, read and written back by
+  update, comes back unchanged: the mapping back is the inverse of the mapping.
+
+### Tests and control runs
+
+`packages/sql/test/sql-writes.spec.ts` runs a third schema through a server (a versioned table, an
+unversioned one with its code in a table of its own, a read-only one): create, update, delete,
+If-Match, 14 refusals with the rows counted before and after, a transaction Bundle that fails
+after a write and one that commits. `examples/facade` adds the 260 writes back, a patient and an
+encounter created, updated and deleted, a decimal's trailing zero kept, and a transaction.
+
+Control runs, each caught: the read-back check off, `onlyElements()` off, If-Match ignored, the
+version not past the current one, a refused write committed, the transaction's view on the pool,
+an array's item matched twice, instants compared as text, a decimal written as a number, a
+referred row's delete as 422, a read-only table declared written, every written table versioned,
+`lastUpdated` not set, a unique key not answered 409.
+
+### Not in this step
+
+History and older versions (`vread`), ids given by the client or the server (a transaction's
+placeholders), conditional writes beyond what the server does over search, and a resource kept in
+more than one row (a patient's several addresses).
