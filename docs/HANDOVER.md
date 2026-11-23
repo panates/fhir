@@ -118,7 +118,9 @@ All are recorded in section 13 of the design document. In short:
    `_include` and `_revinclude` ("Built: chained search and includes" in
    [`decisions/server.md`](decisions/server.md)). The server takes one store now; `RoutingStore`
    sends types to stores of their own ("Decided: one store"). Composite parameters, `_summary` and `_elements` are built.
-   Next: a first facade store over a real database.
+   Next: a first facade store over a real database, designed in
+   [`decisions/facade-store.md`](decisions/facade-store.md) (an EMR schema in PostgreSQL, on sqb,
+   in `examples/facade`).
 2. The repository standards that still fail (`repo-check`) are GitHub settings only, the user's
    to change: merge commits only, a ruleset on `main`, read-only default workflow permission,
    Dependabot alerts, secret scanning and push protection.
