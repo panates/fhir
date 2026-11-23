@@ -123,9 +123,30 @@ argument of each method.
 (`new SmartAuthorizer({ fhir, user: myRules })`). A v2 scope's query (`?category=laboratory`)
 restricts it further.
 
+### Bulk Data export
+
+`$export` of the server, of the patients and of a group (Bulk Data Access IG 2.0), as NDJSON
+files: a kick-off with `Prefer: respond-async` answers 202 and a status URL, which answers 202
+until the manifest of the files. The export runs in the server's process through the store's
+search, a page at a time, as the caller of the kick-off.
+
+```ts
+import { FileExportStorage } from '@fhirjs/server';
+
+new FhirServer({
+  fhir,
+  store,
+  bulkExport: {
+    storage: new FileExportStorage('/var/lib/fhir/export'), // or an object store of your own
+    groupMembers: async id => wardPatients(id), // a group without a Group resource
+  },
+});
+```
+
 ## Documentation
 
-[The design of the server](https://github.com/panates/fhir/blob/main/docs/decisions/server.md)
+[The design of the server](https://github.com/panates/fhir/blob/main/docs/decisions/server.md),
+[Bulk Data export](https://github.com/panates/fhir/blob/main/docs/decisions/bulk-export.md)
 
 ## License
 

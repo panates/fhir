@@ -10,6 +10,9 @@ import { r4Model } from '@fhirjs/r4';
 import {
   type FhirStore,
   FhirServer,
+  MemoryExportStorage,
+  MemoryStore,
+  RoutingStore,
   type SearchQuery,
   type StorePage,
   type StoredResource,
@@ -728,5 +731,107 @@ describe('examples/facade: writes to the EMR', function () {
     expect(
       (await send('GET', 'Observation?patient=2&_summary=count')).body.total,
     ).toBe(labs + 1);
+  });
+});
+
+describe('examples/facade: Bulk Data export of the EMR', function () {
+  const schema = `facadex_${Math.random().toString(36).slice(2, 10)}`;
+  let admin: SqbClient;
+  let client: SqbClient;
+  let server: FhirServer;
+
+  before(async function () {
+    if (!URL_) return this.skip();
+    admin = clientOf(URL_);
+    await createSchema(admin, schema);
+    client = clientOf(URL_, schema);
+    const emr = new EmrStore({ client });
+    // a ward's patients as a Group, kept beside the EMR
+    const groups = new MemoryStore();
+    server = new FhirServer({
+      fhir,
+      store: new RoutingStore({
+        store: groups,
+        routes: { Patient: emr, Encounter: emr, Observation: emr },
+      }),
+      resources: [...TYPES, 'Group'],
+      bulkExport: { storage: new MemoryExportStorage(), pageSize: 15 },
+    });
+    await server.handle(
+      new Request('http://localhost/Group/ward-3', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/fhir+json' },
+        body: JSON.stringify({
+          resourceType: 'Group',
+          id: 'ward-3',
+          type: 'person',
+          actual: true,
+          member: [
+            { entity: { reference: 'Patient/2' } },
+            { entity: { reference: 'Patient/7' } },
+          ],
+        }),
+      }),
+    );
+  });
+
+  after(async () => {
+    await client?.close();
+    if (admin) {
+      await dropSchema(admin, schema);
+      await admin.close();
+    }
+  });
+
+  const get = async (path: string) =>
+    (await server.handle(new Request(`http://localhost/${path}`))).json();
+
+  /** An export run to its end: the resources of its files, by type */
+  const exported = async (path: string) => {
+    const k = await server.handle(
+      new Request(`http://localhost/${path}`, {
+        headers: { Prefer: 'respond-async' },
+      }),
+    );
+    expect(k.status).toBe(202);
+    await server.bulkExport!.idle();
+    const manifest = await (
+      await server.handle(new Request(k.headers.get('Content-Location')!))
+    ).json();
+    const by: Record<string, Record<string, any>[]> = {};
+    for (const f of manifest.output) {
+      const text = await (await server.handle(new Request(f.url))).text();
+      for (const line of text.trimEnd().split('\n'))
+        (by[f.type] ??= []).push(JSON.parse(line));
+    }
+    return { by, manifest };
+  };
+
+  /** Every resource of a search, as the server answers it */
+  const searched = async (query: string) =>
+    (
+      await get(`${query}${query.includes('?') ? '&' : '?'}_count=500`)
+    ).entry.map((e: any) => e.resource);
+
+  it('exports every row, each as a read gives it', async () => {
+    const { by, manifest } = await exported(
+      '$export?_type=Patient,Encounter,Observation',
+    );
+    expect(manifest.error).toEqual([]);
+    for (const type of TYPES) expect(by[type]).toEqual(await searched(type));
+    expect(TYPES.map(t => by[t].length)).toEqual([20, 40, 200]);
+  });
+
+  it("exports a ward's patients from a Group kept beside the EMR", async () => {
+    const { by } = await exported('Group/ward-3/$export');
+    const byId = (l: Record<string, any>[]) =>
+      [...l].sort((a, b) => Number(a.id) - Number(b.id));
+    expect(byId(by.Patient).map(p => p.id)).toEqual(['2', '7']);
+    for (const type of ['Encounter', 'Observation'])
+      expect(byId(by[type])).toEqual(
+        byId(await searched(`${type}?patient=2,7`)),
+      );
+    expect(by.Group.map(g => g.id)).toEqual(['ward-3']);
+    expect(by.Observation.length).toBeGreaterThan(15);
   });
 });
