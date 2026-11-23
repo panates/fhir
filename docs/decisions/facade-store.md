@@ -181,7 +181,7 @@ cannot say, and what sqb lacked, if anything (reported to its maintainers, not w
 `examples/facade`: `schema.sql`, `seed.ts` (20 patients, 40 encounters, 5 tests, 200 results,
 the same on every run), `mapping.ts` (rows to resources), `sql-search.ts` (the translators),
 `emr-store.ts` (`EmrStore`), `db.ts` (a schema of its own, made and seeded), and
-`test/facade.spec.ts`. sqb 6.3.7 (`@sqb/builder`, `@sqb/connect`, `@sqb/postgres`) as dev
+`test/facade.spec.ts`. sqb (`@sqb/builder`, `@sqb/connect`, `@sqb/postgres`; 6.3.8 now) as dev
 dependencies of the repository.
 
 - **Every row maps to a valid R4 resource**, and 140 searches give the same resources, in the

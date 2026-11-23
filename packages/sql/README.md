@@ -94,7 +94,9 @@ value the table refuses 422.
 Rows of a resource in tables of their own are its `children`, each an `SqlChild`: the store asks
 it for the rows of a page at once, joins it for searches and hands it the resource to write.
 `childTable()` is one over a table with a foreign key to the parent, written by a key (a kept row
-keeps its id); any other shape is an `SqlChild` of the application's own SQL.
+keeps its id); `linked(ParentEntity, 'field')` is one over sqb entities, a `@Link().toMany(...)`
+field read and written through sqb's Repository; any other shape is an `SqlChild` of the
+application's own SQL.
 
 ```ts
 Patient: {

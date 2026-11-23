@@ -305,4 +305,49 @@ not a control.
 ### Not in this step
 
 A child over sqb entities (`@Link`), a composite whose parts are on one child row, chains and
-`_has` through a child's reference, and children of children.
+`_has` through a child's reference, and children of children. _A child over sqb entities came
+next: see "A child over sqb entities"._
+
+## A child over sqb entities (2026-11-23)
+
+The third way to fill an `SqlChild`, for an application that already describes its tables as sqb
+entities: `linked(ParentEntity, 'field', { sort, key, rows })` over a `@Link().toMany(...)` field.
+
+### Built
+
+- **`linked()`** (`packages/sql/src/linked.ts`) resolves the link from sqb's metadata once, in
+  the child's `prepare()`, which the store calls before its first read, search or write: the
+  child's entity, its table, the property and column of the foreign key, and its primary key. The
+  link must be one `toMany` hop without conditions of its own; anything else is a TypeError.
+- **Reads** are one `findMany` a page (`In(foreignKey, ids)`), sorted by the entity's properties;
+  the rows given to `resource()` are the entity's objects, with its own property names and types.
+- **Writes** go through the entity's `Repository`, matched by `key` (properties): a kept row
+  `updateOnly` by its primary key (it keeps its id and the properties the resource does not map),
+  a new one `createOnly`, one gone `delete`. Without a key, `deleteMany` and `createOnly`. Two
+  rows of one key are refused (422).
+- **Searches** join the entity's table on the foreign key's column; a parameter over the child
+  names its columns, not its properties.
+- **The store** gives a child `SqlRunner.repository(entity)`, a Repository on the same connection,
+  so the child's writes are in the write's transaction; `SqlChild.prepare()` is new.
+- **`examples/facade`** keeps diagnoses through sqb entities (`entities.ts`): the three ways are
+  mixed, telecoms with `childTable()`, addresses with SQL of its own, diagnoses with `linked()`.
+- **sqb 6.3.8**: `@Link().toMany(...)` threw without `emitDecoratorMetadata`, which this repository
+  keeps off; reported to sqb's maintainers and fixed in 6.3.8 (panates/sqb#130). The peer
+  dependency of `@fhirjs/sql` is `^6.3.8`.
+
+### Tests and control runs
+
+`packages/sql/test/sql-linked.spec.ts`: properties named apart from their columns, a child written
+by a key (a kept row's id and a property FHIR does not see kept) and one without, searches and a
+page over two parents, a write that fails after the child's rows were written (rolled back), and
+three links refused. The facade's tests run with diagnoses through `linked()` unchanged.
+
+Control runs, each caught: the sort ignored, key matching off, a kept row not updated, a row gone
+not deleted, two rows of one key accepted, `remove()` doing nothing, the join on the property name
+instead of the column, rows grouped by their own id instead of the parent's, a `toOne` link
+accepted, the Repository on the pool instead of the write's connection, the children not prepared.
+
+### Not in this step
+
+A link with conditions of its own (`where`) or more than one hop, and parameters named by the
+entity's properties.

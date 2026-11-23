@@ -122,7 +122,7 @@ interface Resolved {
 }
 
 /** Where queries run: the pool, or the connection of a transaction */
-type Db = Pick<SqbClient, 'execute'> | SqbConnection;
+type Db = SqbClient | SqbConnection;
 
 /** The column the version is read into, beside the table's own */
 const VERSION = 'fhir_version__';
@@ -141,6 +141,8 @@ export class SqlStore implements FhirStore {
   private readonly _types = new Map<string, Resolved>();
   /** The connection of the transaction this view runs in */
   private _connection?: SqbConnection;
+  /** The children prepared, once */
+  private _prepared?: Promise<void>;
 
   constructor(options: SqlStoreOptions) {
     this._client = options.client;
@@ -197,6 +199,7 @@ export class SqlStore implements FhirStore {
   }
 
   async read(type: string, id: string): Promise<StoredResource | undefined> {
+    await this._prepare();
     return this._read(this._db, type, id);
   }
 
@@ -218,6 +221,7 @@ export class SqlStore implements FhirStore {
     type: string,
     query: SearchQuery,
   ): Promise<StorePage<StoredResource>> {
+    await this._prepare();
     const t = this._types.get(type)!;
     const p = new SqlParams();
     const aliases = { n: 0 };
@@ -346,6 +350,7 @@ export class SqlStore implements FhirStore {
     interaction: 'create' | 'update' | 'delete',
     write: (db: Db) => Promise<T>,
   ): Promise<T> {
+    await this._prepare();
     const run = async (db: Db) => {
       try {
         return await write(db);
@@ -447,7 +452,26 @@ export class SqlStore implements FhirStore {
   }
 
   private _runner(db: Db): SqlRunner {
-    return { rows: async (sql, params) => this._rows(db, sql, params ?? {}) };
+    return {
+      rows: async (sql, params) => this._rows(db, sql, params ?? {}),
+      repository: entity => db.getRepository(entity),
+    };
+  }
+
+  /** Prepares every child once; a failure is tried again on the next call */
+  private _prepare(): Promise<void> {
+    this._prepared ??= Promise.all(
+      [...this._types.values()].flatMap(t =>
+        Object.values(t.def.children ?? {}).map(c => c.prepare?.()),
+      ),
+    ).then(
+      () => undefined,
+      e => {
+        this._prepared = undefined;
+        throw e;
+      },
+    );
+    return this._prepared;
   }
 
   private async _writeChildren(

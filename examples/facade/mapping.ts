@@ -116,9 +116,6 @@ export const encounterColumns = (a: string) => `
   ${instant(`${a}.discharged_at`)} as discharged_at, ${a}.department, ${a}.physician,
   ${instant(`${a}.updated_at`)} as updated_at`;
 
-/** An encounter's diagnoses, the main one first */
-export const diagnosisColumns = (a: string) => `${a}.code`;
-
 export function encounterOf(
   r: Row,
   children: Record<string, Row[]>,
@@ -289,7 +286,7 @@ export function telecomRows(r: Row): Row[] {
   }));
 }
 
-/** An encounter's diagnoses as rows: the first is the main one */
+/** An encounter's diagnoses as Diagnosis entities (entities.ts): the first is the main one */
 export function diagnosisRows(r: Row): Row[] {
   return (r.reasonCode ?? []).map((c: any, i: number) => ({
     code: codingOf(c, ICD10) ?? null,

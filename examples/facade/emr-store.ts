@@ -13,6 +13,7 @@ import {
   constant,
   date,
   day,
+  linked,
   instant,
   number,
   period,
@@ -31,7 +32,6 @@ import {
   MRN,
   NATIONAL_ID,
   UCUM,
-  diagnosisColumns,
   diagnosisRows,
   encounterColumns,
   encounterOf,
@@ -46,6 +46,7 @@ import {
   telecomRows,
 } from './mapping.js';
 import { addresses } from './addresses.js';
+import { Encounter } from './entities.js';
 
 export interface EmrStoreOptions {
   /** An sqb client of the EMR's database */
@@ -121,11 +122,9 @@ export class EmrStore extends SqlStore {
           resource: encounterOf,
           row: encounterRow,
           children: {
-            diagnoses: childTable({
-              table: 'encounter_diagnoses',
-              fk: 'encounter_id',
-              select: diagnosisColumns,
-              order: a => `${a}.rank`,
+            // through the application's sqb entities
+            diagnoses: linked(Encounter, 'diagnoses', {
+              sort: ['rank'],
               key: ['code'],
               rows: diagnosisRows,
             }),

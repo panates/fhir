@@ -2,14 +2,17 @@
  * What writes need besides SQL: helpers for a table's `row()`, and the
  * check that a written resource reads back with every element it was given.
  */
+import type { Repository } from '@sqb/connect';
 import { FhirServerError } from '@fhirjs/server';
 
-/** Runs SQL on the connection of the write, inside its transaction */
+/** Runs SQL on the connection of the read or write: inside a write's transaction */
 export interface SqlRunner {
   rows(
     sql: string,
     params?: Record<string, unknown>,
   ): Promise<Record<string, any>[]>;
+  /** An sqb Repository of an entity on the same connection */
+  repository?<T>(entity: new (...args: any[]) => T): Repository<T>;
 }
 
 /**
