@@ -11,7 +11,7 @@ say: how to work in the repository, what is open, and what to watch for.
   and [panates/fhir#2](https://github.com/panates/fhir/pull/2) (CI and the repository
   standards) are merged into `dev`. `dev` did not exist before this work and was made from
   `main`.
-- 359 tests pass (`pnpm test`), 394 with `FHIR_PG_URL`; type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
+- 359 tests pass (`pnpm test`), 396 with `FHIR_PG_URL`; type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
 - CI: `.github/workflows/test.yml` runs on pull requests into `dev` and on pushes to `dev`. It
   builds, checks the types of the tests, fetches the HL7 packages (cached, keyed by the hash of
   `support/fetch-packages.mts`; a pull request restores the cache `dev`'s runs save), checks that
@@ -140,7 +140,8 @@ All are recorded in section 13 of the design document. In short:
    `patient` and `includeAssociatedData` (Provenance). Next, to choose
    with the user: XML or subscriptions; a first release. A composite on one child row, chains
    and `_has` through a child's reference, and a link with conditions (sqb 6.4.0) are built
-   ("Searches through children" in [`decisions/sql-facade.md`](decisions/sql-facade.md)).
+   ("Searches through children" in [`decisions/sql-facade.md`](decisions/sql-facade.md)), and
+   after them children of children, links of more hops (read) and columns by property.
 2. The GitHub settings were set with the user (2026-11-23): merge commits only, a ruleset on
    `main` (no deletion, no force push), read-only default workflow permission, Dependabot alerts.
    Secret scanning and push protection still fail `repo-check`: GitHub took the request but kept

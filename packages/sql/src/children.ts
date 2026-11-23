@@ -40,6 +40,13 @@ export interface SqlChild {
    * when the foreign key cascades
    */
   remove?(parentId: string, db: SqlRunner): Promise<void>;
+  /**
+   * Children of its rows (an address's lines), by name: read into each row
+   * under the name, searched by `child('addresses.lines', ...)`
+   */
+  children?: Record<string, SqlChild>;
+  /** The SQL of a row's id on `alias`, which its own children join to */
+  rowId?(alias: string): string;
 }
 
 /** A search parameter over the rows of a child */
@@ -51,7 +58,8 @@ export interface ChildParam extends ParamSql {
  * A parameter answered from the rows of the child `name`: a resource
  * matches when one of its rows does, and has a value when one of its rows
  * has. `where` limits the rows (`a => \`${a}.system = 'phone'\``). Sorted by
- * the lowest of its rows' keys ascending, the highest descending.
+ * the lowest of its rows' keys ascending, the highest descending. A child
+ * of a child is named by its path: `addresses.lines`.
  */
 export function child(
   name: string,
@@ -87,13 +95,24 @@ export interface ChildTableOptions {
   /**
    * The resource's rows, for writes: every column mapped but the foreign
    * key, null where the resource has no value. Without it, the table is
-   * only read.
+   * only read. With `children`, a row gives under a child's name what that
+   * child writes its rows from (the address its lines are of); it is not a
+   * column.
    */
   rows?(resource: Row): Row[];
+  /** The column of a row's id: needed with `children` */
+  id?: string;
+  /**
+   * Children of the rows, by name (an address's lines): read into each row
+   * under the name, written after their row, removed before it
+   */
+  children?: Record<string, SqlChild>;
 }
 
 /** The column the parent's id is read into */
 const PARENT = 'fhir_parent__';
+/** The column a row's own id is read into, for its children */
+const ROW = 'fhir_row__';
 
 const quoteKey = (row: Row, key: readonly string[]) =>
   JSON.stringify(key.map(k => (row[k] == null ? null : String(row[k]))));
@@ -105,7 +124,34 @@ const quoteKey = (row: Row, key: readonly string[]) =>
  * deleted and inserted again.
  */
 export function childTable(options: ChildTableOptions): SqlChild {
-  const { table, fk, key } = options;
+  const { table, fk, key, id } = options;
+  const nested = Object.entries(options.children ?? {});
+  if (nested.length && !id)
+    throw new TypeError(
+      `childTable(${table}): a table with children needs the column of its rows' id`,
+    );
+  /** The columns of a row: its children's names are not columns */
+  const columnsOf = (row: Row) =>
+    Object.keys(row).filter(c => !options.children?.[c]);
+  /** A row's children written, from what the row gives under their names */
+  const writeNested = async (rowId: string, row: Row, db: SqlRunner) => {
+    for (const [name, c] of nested)
+      if (c.write) await c.write(rowId, row[name] ?? {}, db);
+  };
+  /** A row's children removed, before the row */
+  const removeNested = async (rowId: string, db: SqlRunner) => {
+    for (const [, c] of nested) if (c.remove) await c.remove(rowId, db);
+  };
+  /** The ids of a parent's rows, to remove their children */
+  const rowIds = async (db: SqlRunner, parentId: string) => {
+    const params: Row = {};
+    return (
+      await db.rows(
+        `select cast(${id} as text) as id from ${table} where ${ofParent(params, parentId)}`,
+        params,
+      )
+    ).map(r => r.id as string);
+  };
   const ofParent = (params: Row, parentId: string) => {
     params.parent = parentId;
     return `${fk} = :parent`;
@@ -119,13 +165,16 @@ export function childTable(options: ChildTableOptions): SqlChild {
       .join(' and ');
   const insert = async (db: SqlRunner, parentId: string, row: Row) => {
     const params: Row = { parent: parentId };
-    const columns = Object.keys(row);
+    const columns = columnsOf(row);
     columns.forEach((c, i) => (params[`v${i}`] = row[c] ?? null));
-    await db.rows(
+    const inserted = await db.rows(
       `insert into ${table} (${[fk, ...columns].join(', ')})
-        values (:parent, ${columns.map((_, i) => `:v${i}`).join(', ')})`,
+        values (:parent, ${columns.map((_, i) => `:v${i}`).join(', ')})${
+          nested.length ? ` returning cast(${id} as text) as id` : ''
+        }`,
       params,
     );
+    if (nested.length) await writeNested(inserted[0].id, row, db);
   };
   return {
     async read(parentIds, db) {
@@ -139,12 +188,23 @@ export function childTable(options: ChildTableOptions): SqlChild {
         })
         .join(', ');
       const order = options.order ? `, ${options.order('c')}` : '';
+      const rowId = nested.length ? `, cast(c.${id} as text) as ${ROW}` : '';
       const rows = await db.rows(
-        `select cast(c.${fk} as text) as ${PARENT}, ${options.select('c')}
+        `select cast(c.${fk} as text) as ${PARENT}${rowId}, ${options.select('c')}
           from ${table} c where c.${fk} in (${list}) order by c.${fk}${order}`,
         params,
       );
-      for (const { [PARENT]: parent, ...row } of rows) {
+      // the rows' children, a read each for all of the rows
+      const ofRows = await Promise.all(
+        nested.map(([, c]) =>
+          c.read(
+            rows.map(r => r[ROW]),
+            db,
+          ),
+        ),
+      );
+      for (const { [PARENT]: parent, [ROW]: own, ...row } of rows) {
+        nested.forEach(([name], i) => (row[name] = ofRows[i].get(own) ?? []));
         const list = byParent.get(parent);
         if (list) list.push(row);
         else byParent.set(parent, [row]);
@@ -155,10 +215,15 @@ export function childTable(options: ChildTableOptions): SqlChild {
       table,
       on: `${alias}.${fk} = ${parentId}`,
     }),
+    children: options.children,
+    rowId: id ? alias => `${alias}.${id}` : undefined,
     write: options.rows
       ? async (parentId, resource, db) => {
           const rows = options.rows!(resource);
           if (!key?.length) {
+            if (nested.length)
+              for (const rowId of await rowIds(db, parentId))
+                await removeNested(rowId, db);
             const params: Row = {};
             await db.rows(
               `delete from ${table} where ${ofParent(params, parentId)}`,
@@ -180,7 +245,10 @@ export function childTable(options: ChildTableOptions): SqlChild {
           }
           const params: Row = {};
           const current = await db.rows(
-            `select ${key.map(k => `cast(${k} as text) as ${k}`).join(', ')}
+            `select ${[
+              ...key.map(k => `cast(${k} as text) as ${k}`),
+              ...(nested.length ? [`cast(${id} as text) as ${ROW}`] : []),
+            ].join(', ')}
               from ${table} where ${ofParent(params, parentId)} for update`,
             params,
           );
@@ -191,11 +259,12 @@ export function childTable(options: ChildTableOptions): SqlChild {
             const where = `${ofParent(p, parentId)} and ${keyIs(p, row)}`;
             const next = wanted.get(k);
             if (!next) {
+              if (nested.length) await removeNested(row[ROW], db);
               await db.rows(`delete from ${table} where ${where}`, p);
               continue;
             }
             kept.add(k);
-            const columns = Object.keys(next);
+            const columns = columnsOf(next);
             columns.forEach((c, i) => (p[`v${i}`] = next[c] ?? null));
             await db.rows(
               `update ${table} set ${columns
@@ -203,12 +272,16 @@ export function childTable(options: ChildTableOptions): SqlChild {
                 .join(', ')} where ${where}`,
               p,
             );
+            if (nested.length) await writeNested(row[ROW], next, db);
           }
           for (const [k, row] of wanted)
             if (!kept.has(k)) await insert(db, parentId, row);
         }
       : undefined,
     async remove(parentId, db) {
+      if (nested.length)
+        for (const rowId of await rowIds(db, parentId))
+          await removeNested(rowId, db);
       const params: Row = {};
       await db.rows(
         `delete from ${table} where ${ofParent(params, parentId)}`,

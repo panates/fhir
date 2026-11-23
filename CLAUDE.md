@@ -42,7 +42,7 @@ a feature branch: open a pull request to get a run.
 ## Rules and traps
 
 - **Run `pnpm fetch-packages` before you measure.** Without it the tests that need the HL7
-  packages are skipped, and the test count is not the real one (359 with them; 394 when
+  packages are skipped, and the test count is not the real one (359 with them; 396 when
   `FHIR_PG_URL` names a PostgreSQL database for `@fhirjs/sql` and the facade example, as in CI).
 - **Tag a slow test `#slow`** at the end of its title: one that runs over every example of a
   version or takes about a second or more. CI runs the tagged tests in a second job, in parallel

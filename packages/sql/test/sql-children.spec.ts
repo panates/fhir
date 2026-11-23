@@ -35,6 +35,13 @@ const DDL = [
      person_id bigint not null references persons, family text, given text, ord int not null)`,
   // kept by another system: read, never written
   `create table person_languages (person_id bigint not null references persons, lang text not null)`,
+  // a child of a child: an address's lines, without a cascade (removed first)
+  `create table person_addresses (
+     address_id bigint generated always as identity primary key,
+     person_id bigint not null references persons, kind text not null, city text)`,
+  `create table address_lines (
+     line_id bigint generated always as identity primary key,
+     address_id bigint not null references person_addresses, line text not null, ord int not null)`,
 ];
 
 const patient = (): SqlTable => ({
@@ -56,9 +63,16 @@ const patient = (): SqlTable => ({
         language: { coding: [{ system: LANGUAGE, code: l.lang }] },
       })),
     }),
+    ...(c.addresses.length && {
+      address: c.addresses.map(a => ({
+        use: a.kind,
+        ...(a.lines.length && { line: a.lines.map((l: any) => l.line) }),
+        city: a.city ?? undefined,
+      })),
+    }),
   }),
   row: r => {
-    onlyElements(r, ['identifier', 'name', 'communication']);
+    onlyElements(r, ['identifier', 'name', 'communication', 'address']);
     return { mrn: r.identifier?.[0]?.value ?? null };
   },
   children: {
@@ -80,10 +94,38 @@ const patient = (): SqlTable => ({
       select: a => `${a}.lang`,
       order: a => `${a}.lang`,
     }),
+    addresses: childTable({
+      table: 'person_addresses',
+      fk: 'person_id',
+      id: 'address_id',
+      select: a => `${a}.kind, ${a}.city`,
+      order: a => `${a}.address_id`,
+      key: ['kind'],
+      // under lines: the address its lines are of
+      rows: r =>
+        (r.address ?? []).map((a: any) => ({
+          kind: a.use ?? null,
+          city: a.city ?? null,
+          lines: a,
+        })),
+      children: {
+        lines: childTable({
+          table: 'address_lines',
+          fk: 'address_id',
+          select: a => `${a}.line`,
+          order: a => `${a}.ord`,
+          rows: a =>
+            (a.line ?? []).map((line: string, ord: number) => ({ line, ord })),
+        }),
+      },
+    }),
   },
   params: {
     family: child('names', string('family')),
     language: child('languages', token(code('lang', { system: LANGUAGE }))),
+    // the lines of the addresses: a child of a child
+    address: child('addresses.lines', string('line')),
+    'address-city': child('addresses', string('city')),
   },
   sort: ['family'],
 });
@@ -276,6 +318,82 @@ describe('SqlStore children', function () {
     ).toEqual(['Smith/Adams', 'Brown', 'Young/Smithers']);
   });
 
+  it("reads, writes and searches a child of a child: an address's lines", async () => {
+    const lines = () =>
+      rows(`select l.line_id::int as id, a.kind, l.line from address_lines l
+              join person_addresses a using (address_id) order by a.kind, l.ord`);
+    const addresses = () =>
+      rows(
+        `select address_id::int as id, kind from person_addresses order by kind`,
+      );
+    const created = await send('POST', 'Patient', {
+      resourceType: 'Patient',
+      identifier: [{ system: 'urn:mrn', value: 'D1' }],
+      address: [
+        { use: 'home', line: ['1 Main St', 'Flat 2'], city: 'Ankara' },
+        { use: 'work', line: ['9 Office Rd'], city: 'Izmir' },
+      ],
+    });
+    expect(created.status).toBe(201);
+    const p = created.body;
+    expect(p.address).toEqual([
+      { use: 'home', line: ['1 Main St', 'Flat 2'], city: 'Ankara' },
+      { use: 'work', line: ['9 Office Rd'], city: 'Izmir' },
+    ]);
+    const before = await lines();
+    const ids0 = await addresses();
+    // home's lines change; the work address and its line rows are kept
+    const changed = {
+      ...p,
+      address: [
+        { use: 'home', line: ['3 New St'], city: 'Ankara' },
+        { use: 'work', line: ['9 Office Rd'], city: 'Izmir' },
+      ],
+    };
+    const u = await send('PUT', `Patient/${p.id}`, changed);
+    expect([u.status, u.body.address]).toEqual([200, changed.address]);
+    expect(await addresses()).toEqual(ids0);
+    const after = await lines();
+    expect(after.map(l => [l.kind, l.line])).toEqual([
+      ['home', '3 New St'],
+      ['work', '9 Office Rd'],
+    ]);
+    // without a key below: the work address's line rows are written again too
+    expect(after[1].id).not.toBe(before[2].id);
+
+    const other = (
+      await send('POST', 'Patient', {
+        resourceType: 'Patient',
+        identifier: [{ system: 'urn:mrn', value: 'D2' }],
+        address: [{ use: 'home', line: ['1 Main St'], city: 'Bursa' }],
+      })
+    ).body;
+    const search = async (q: string) =>
+      ((await send('GET', `Patient?${q}`)).body.entry ?? [])
+        .map((e: any) => e.resource.id)
+        .sort()
+        .join(',');
+    expect([
+      await search('address=3 New'),
+      await search('address=1 Main'),
+      await search('address=9 office'),
+      await search('address-city=Bursa'),
+      await search(`address:missing=true&_id=${p.id},${other.id}`),
+    ]).toEqual([p.id, other.id, p.id, other.id, '']);
+
+    // an address gone: its lines first (no cascade), then the address
+    const less = { ...changed, address: [changed.address[0]] };
+    expect((await send('PUT', `Patient/${p.id}`, less)).status).toBe(200);
+    expect((await lines()).map(l => l.line).sort()).toEqual([
+      '1 Main St',
+      '3 New St',
+    ]);
+    // deleted: every row, the lines first
+    expect((await send('DELETE', `Patient/${p.id}`)).status).toBe(204);
+    expect((await send('DELETE', `Patient/${other.id}`)).status).toBe(204);
+    expect([await addresses(), await lines()]).toEqual([[], []]);
+  });
+
   it('refuses a parameter over a child the table does not have', () => {
     const t = patient();
     t.params = { family: child('nope', string('family')) };
@@ -283,6 +401,23 @@ describe('SqlStore children', function () {
       () => new SqlStore({ client: {} as any, types: { Patient: t } }),
     ).toThrow(
       'Patient: child(nope) names no child of the table that can be joined',
+    );
+    // a child of a child whose rows have no id to join
+    t.params = { family: child('names.lines', string('line')) };
+    expect(
+      () => new SqlStore({ client: {} as any, types: { Patient: t } }),
+    ).toThrow(
+      'Patient: child(names.lines) names no child of the table that can be joined',
+    );
+    expect(() =>
+      childTable({
+        table: 'x',
+        fk: 'p',
+        select: a => a,
+        children: { y: childTable({ table: 'y', fk: 'x', select: a => a }) },
+      }),
+    ).toThrow(
+      "childTable(x): a table with children needs the column of its rows' id",
     );
   });
 });

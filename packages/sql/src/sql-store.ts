@@ -7,6 +7,7 @@ import {
   Delete,
   Eq,
   Exists,
+  InnerJoin,
   Insert,
   Not,
   Or,
@@ -128,10 +129,34 @@ interface ChildRows {
   /** The parameter on a row of the child */
   param: ParamSql;
   /** The rows' table and alias, joined to the parent row of `ctx`, without `where` */
-  rows(ctx: SqlContext): { inner: SqlContext; from: string; on: string };
+  rows(ctx: SqlContext): Rows;
   /** The rows the parameter is limited to */
   where?: (alias: string) => string;
 }
+
+/**
+ * A child's rows joined to a parent row: the table of the first child, the
+ * tables of the children of its rows joined to it, and the condition of the
+ * first on the parent
+ */
+interface Rows {
+  /** The last child's row */
+  inner: SqlContext;
+  from: string;
+  joins: { table: string; on: string }[];
+  on: string;
+}
+
+/** SELECT 1 over the rows, with `where` */
+const selectRows = (r: Rows, ...where: Cond[]) => {
+  let q = Select(Raw('1')).from(r.from);
+  for (const j of r.joins) q = q.join(InnerJoin(j.table).on(Raw(j.on)));
+  return q.where(...where);
+};
+
+/** The rows' FROM as SQL text */
+const fromSql = (r: Rows) =>
+  [r.from, ...r.joins.map(j => `join ${j.table} on ${j.on}`)].join(' ');
 
 type ChildParamSql = ParamSql & { [CHILD]: ChildRows };
 const CHILD = Symbol('child');
@@ -571,16 +596,36 @@ export class SqlStore implements FhirStore {
     p: ChildParam,
   ): ParamSql {
     const { name, param, where } = p.child;
-    const join = def.children?.[name]?.join;
-    if (!join)
-      throw new TypeError(
-        `${type}: child(${name}) names no child of the table that can be joined`,
-      );
-    const n = Object.keys(def.children!).indexOf(name);
-    const joined = (ctx: SqlContext) => {
-      const inner = { ...ctx, alias: `${ctx.alias}_k${n}` };
-      const j = join(columnSql(id, ctx.alias), inner.alias);
-      return { inner, from: `${j.table} ${inner.alias}`, on: j.on };
+    // the path: a child of the table, and children of its rows
+    const path: { child: SqlChild; n: number }[] = [];
+    let children = def.children;
+    for (const step of name.split('.')) {
+      const c = children?.[step];
+      if (!c?.join || (path.length && !path.at(-1)!.child.rowId))
+        throw new TypeError(
+          `${type}: child(${name}) names no child of the table that can be joined`,
+        );
+      path.push({ child: c, n: Object.keys(children!).indexOf(step) });
+      children = c.children;
+    }
+    // the rows of the last child, joined through those of the children before
+    const joined = (ctx: SqlContext): Rows => {
+      let alias = ctx.alias;
+      let parentId = columnSql(id, ctx.alias);
+      let from = '';
+      let on = '';
+      const joins: Rows['joins'] = [];
+      for (const [i, { child, n }] of path.entries()) {
+        const next = `${alias}_k${n}`;
+        const j = child.join!(parentId, next);
+        if (i === 0) {
+          from = `${j.table} ${next}`;
+          on = j.on;
+        } else joins.push({ table: `${j.table} ${next}`, on: j.on });
+        alias = next;
+        parentId = child.rowId?.(next) ?? '';
+      }
+      return { inner: { ...ctx, alias }, from, joins, on };
     };
     const rows = (ctx: SqlContext) => {
       const r = joined(ctx);
@@ -588,9 +633,7 @@ export class SqlStore implements FhirStore {
     };
     const exists = (ctx: SqlContext, cond: (inner: SqlContext) => Cond) => {
       const r = rows(ctx);
-      return Exists(
-        Select(Raw('1')).from(r.from).where(Raw(r.on), cond(r.inner)),
-      ) as unknown as Cond;
+      return Exists(selectRows(r, Raw(r.on), cond(r.inner))) as unknown as Cond;
     };
     const resolved: ChildParamSql = {
       [CHILD]: { name, param, rows: joined, where },
@@ -604,7 +647,7 @@ export class SqlStore implements FhirStore {
             return `(select ${descending ? 'max' : 'min'}(${param.sort!(
               r.inner,
               descending,
-            )}) from ${r.from} where ${r.on})`;
+            )}) from ${fromSql(r)} where ${r.on})`;
           }
         : undefined,
     };
@@ -641,12 +684,11 @@ export class SqlStore implements FhirStore {
       ];
       conds.push(
         Exists(
-          Select(Raw('1'))
-            .from(r.from)
-            .where(
-              Raw([r.on, ...wheres].join(' and ')),
-              ...at.map(i => cond(childOf(parts[i])!.param, i, r.inner)),
-            ),
+          selectRows(
+            r,
+            Raw([r.on, ...wheres].join(' and ')),
+            ...at.map(i => cond(childOf(parts[i])!.param, i, r.inner)),
+          ),
         ) as unknown as Cond,
       );
     }
@@ -677,9 +719,7 @@ export class SqlStore implements FhirStore {
     if (!child) return cond(ctx);
     const r = child.rows(ctx);
     const on = child.where ? `${r.on} and ${child.where(r.inner.alias)}` : r.on;
-    return Exists(
-      Select(Raw('1')).from(r.from).where(Raw(on), cond(r.inner)),
-    ) as unknown as Cond;
+    return Exists(selectRows(r, Raw(on), cond(r.inner))) as unknown as Cond;
   }
 
   private _ctx(alias: string, params: SqlParams): SqlContext {

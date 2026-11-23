@@ -19,6 +19,8 @@ import {
   code,
   linked,
   onlyElements,
+  reference,
+  string,
   token,
 } from '../src/index.js';
 
@@ -73,6 +75,33 @@ class Spoken {
   declare lang: string;
 }
 
+@Entity('doctors')
+class Doctor {
+  @PrimaryKey()
+  @Column({ fieldName: 'doctor_no', dataType: DataType.BIGINT })
+  declare id: number;
+
+  @Column({ fieldName: 'surname', dataType: DataType.TEXT })
+  declare family: string;
+}
+
+/** The table between people and doctors, with a role */
+@Entity('care')
+class Care {
+  @PrimaryKey()
+  @Column({ dataType: DataType.BIGINT })
+  declare id: number;
+
+  @Column({ fieldName: 'person_ref', dataType: DataType.BIGINT })
+  declare personId: number;
+
+  @Column({ fieldName: 'doctor_ref', dataType: DataType.BIGINT })
+  declare doctorId: number;
+
+  @Column({ dataType: DataType.TEXT })
+  declare role: string;
+}
+
 @Entity('people')
 class Person {
   @PrimaryKey()
@@ -106,6 +135,16 @@ class Person {
     where: { kind: 'email' },
   }))
   declare emails: Contact[];
+
+  // two hops: the care rows of a GP, then their doctors
+  @(Link()
+    .toMany(() => Care, {
+      sourceKey: 'id',
+      targetKey: 'personId',
+      where: Eq('role', 'gp'),
+    })
+    .toOne(() => Doctor, { sourceKey: 'doctorId', targetKey: 'id' }))
+  declare gps: Doctor[];
 }
 
 const DDL = [
@@ -117,6 +156,11 @@ const DDL = [
   `create table spoken (
      id bigint generated always as identity primary key,
      person_ref bigint not null references people, lang text not null)`,
+  `create table doctors (doctor_no bigint primary key, surname text not null)`,
+  `create table care (id bigint generated always as identity primary key,
+     person_ref bigint not null references people, doctor_ref bigint not null references doctors,
+     role text not null)`,
+  `insert into doctors values (10, 'Smith'), (11, 'Jones'), (12, 'Brown')`,
 ];
 
 const patient = (
@@ -359,6 +403,7 @@ describe('SqlStore linked children (sqb entities)', function () {
               position,
             })),
       });
+    const emails = telecoms('email');
     const table: SqlTable = {
       ...patient(),
       resource: (r, c) => ({
@@ -376,11 +421,12 @@ describe('SqlStore linked children (sqb entities)', function () {
         onlyElements(r, ['identifier', 'telecom']);
         return { mrn: r.identifier?.[0]?.value ?? null };
       },
-      children: { phones: telecoms('phone'), emails: telecoms('email') },
+      children: { phones: telecoms('phone'), emails },
       // no where of their own: the links' conditions limit the rows
       params: {
         phone: child('phones', token(code('val'))),
-        email: child('emails', token(code('val'))),
+        // by the entity's property: value is the column val
+        email: child('emails', token(code(emails.column('value')))),
       },
     };
     const links = new FhirServer({
@@ -459,6 +505,94 @@ describe('SqlStore linked children (sqb entities)', function () {
     expect(await contacts(p.id)).toEqual([]);
   });
 
+  it('reads and searches a link of two hops, through a table between', async () => {
+    const gps = linked(Person, 'gps', { sort: ['family'] });
+    const table: SqlTable = {
+      ...patient(),
+      resource: (r, c) => ({
+        resourceType: 'Patient',
+        id: r.id,
+        identifier: [{ system: 'urn:mrn', value: r.mrn }],
+        ...(c.gps.length && {
+          generalPractitioner: c.gps.map(d => ({
+            reference: `Practitioner/${d.id}`,
+            display: d.family,
+          })),
+        }),
+      }),
+      row: r => {
+        onlyElements(r, ['identifier', 'generalPractitioner']);
+        return { mrn: r.identifier?.[0]?.value ?? null };
+      },
+      children: { gps },
+      params: {
+        'general-practitioner': child(
+          'gps',
+          reference(gps.column('id'), 'Practitioner'),
+        ),
+        // a property no column has: refused when searched
+        name: child('gps', string(gps.column('nope'))),
+      },
+    };
+    const hops = new FhirServer({
+      fhir,
+      store: new SqlStore({ client, types: { Patient: table } }),
+      resources: ['Patient'],
+    });
+    const go = async (path: string) => {
+      const r = await hops.handle(new Request(`http://localhost/${path}`));
+      return { status: r.status, body: await r.json() };
+    };
+    const person = async (mrn: string) =>
+      (
+        await rows(
+          `insert into people (mrn) values ('${mrn}') returning person_no::text as id`,
+        )
+      )[0].id as string;
+    const a = await person('H1');
+    const b = await person('H2');
+    const none = await person('H3');
+    await client.execute(`insert into care (person_ref, doctor_ref, role) values
+      (${a}, 10, 'gp'), (${a}, 11, 'gp'), (${a}, 12, 'nurse'), (${b}, 12, 'gp'), (${none}, 10, 'nurse')`);
+    // sorted by the doctors' family, not by their keys; the nurse's
+    // doctor is not a GP
+    expect((await go(`Patient/${a}`)).body.generalPractitioner).toEqual([
+      { reference: 'Practitioner/11', display: 'Jones' },
+      { reference: 'Practitioner/10', display: 'Smith' },
+    ]);
+    expect((await go(`Patient/${none}`)).body.generalPractitioner).toBe(
+      undefined,
+    );
+    const ids = async (q: string) =>
+      ((await go(`Patient?${q}`)).body.entry ?? [])
+        .map((e: any) => e.resource.id)
+        .sort()
+        .join(',');
+    expect([
+      await ids('general-practitioner=Practitioner/11'),
+      await ids('general-practitioner=Practitioner/12'),
+      await ids('general-practitioner=10,12'),
+      await ids(`general-practitioner:missing=true&_id=${a},${b},${none}`),
+    ]).toEqual([a, b, [a, b].sort().join(','), none]);
+    const nope = await hops.handle(
+      new Request('http://localhost/Patient?name=x'),
+    );
+    expect(nope.status).toBe(500);
+    // not written
+    const refused = new SqlStore({
+      client,
+      types: {
+        Patient: {
+          ...table,
+          children: { gps: linked(Person, 'gps', { rows: () => [] }) },
+        },
+      },
+    });
+    await expect(refused.read('Patient', a)).rejects.toThrow(
+      'linked(Person, gps): a link of more than one hop is read, not written',
+    );
+  });
+
   it('refuses a link it cannot follow, when the store is first used', async () => {
     const refusal = async (children: SqlTable['children']) => {
       const store = new SqlStore({
@@ -487,7 +621,7 @@ describe('SqlStore linked children (sqb entities)', function () {
     ]).toEqual([
       'linked(NotAnEntity, contacts): NotAnEntity is not an entity with a link contacts',
       'linked(Person, nope): Person is not an entity with a link nope',
-      'linked(Person, firstLanguage): the link must be one toMany hop',
+      'linked(Person, firstLanguage): the link must be toMany',
     ]);
   });
 });

@@ -394,4 +394,41 @@ alias not replaced; conditions refused.
 ### Not in this step
 
 A link of more than one hop; parameters named by the entity's properties; children of
-children.
+children. _All three came next: see "Children of children, links of more hops"._
+
+## Children of children, links of more hops (2026-11-23)
+
+- **Children of a child's rows**: `childTable({ id, children: { lines: childTable(...) } })`.
+  Each row gets its children's rows under their names (an address's `lines`), a read per child
+  for the rows of a page. Writes go row by row: a kept row (by `key`) is updated and its
+  children written, a new one inserted (`returning` its id) and its children written, a row
+  gone has its children removed first, then is deleted; `rows()` gives under a child's name
+  what that child writes from (the address its lines are of), not a column. Deleting the
+  parent removes the children of each row first, so no cascade is needed. A child of a child
+  is searched by its path, `child('addresses.lines', string('line'))`: the rows of the first
+  child joined to those of the next by the row's id (`rowId`), in one EXISTS. An `SqlChild`
+  of its own gives `children` and `rowId` the same way.
+- **A link of more than one hop**: `linked(Person, 'gps')` over
+  `toMany(Care, { where: role = gp }).toOne(Doctor)`, through a table between. It is read
+  through the parent's entity (`findMany` of the parents with the link in the projection: sqb
+  follows the hops and their conditions), sorted by `sort` in the process, and searched by
+  EXISTS over the hops between, joined by their keys, each hop's conditions written by sqb.
+  It is not written: the rows of a table between are not the resource's to make; `rows` is a
+  TypeError.
+- **Columns by property**: `linked()` gives `column(property)`, the column of a property of
+  the child's entity, for its parameters: `code(emails.column('value'))`. A property no column
+  has is a TypeError when searched.
+
+Tests (`sql-children.spec.ts` 1 more, `sql-linked.spec.ts` 1 more, PostgreSQL): a patient's
+addresses with their lines, without a cascade, written, changed (an address kept by its key,
+its lines written again), searched by the lines and by the city, an address removed, deleted;
+the GPs of a care table with a role, two hops, sorted against the order sqb gives, searched,
+not written; the email of a link by its property. Control runs, each caught (13): the rows'
+children not read, not written on an update or an insert, not removed with a row or the
+parent, their name written as a column; the joins of a path dropped, a path searched on its
+first child; the hops not read or not sorted, their conditions dropped in a search, written;
+a column by property ignored.
+
+### Not in this step
+
+Writes through a link of more than one hop; a child of a `linked()` row.
