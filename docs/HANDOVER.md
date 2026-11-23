@@ -11,7 +11,7 @@ say: how to work in the repository, what is open, and what to watch for.
   and [panates/fhir#2](https://github.com/panates/fhir/pull/2) (CI and the repository
   standards) are merged into `dev`. `dev` did not exist before this work and was made from
   `main`.
-- 345 tests pass (`pnpm test`), 376 with `FHIR_PG_URL`; type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
+- 351 tests pass (`pnpm test`), 382 with `FHIR_PG_URL`; type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
 - CI: `.github/workflows/test.yml` runs on pull requests into `dev` and on pushes to `dev`. It
   builds, checks the types of the tests, fetches the HL7 packages (cached, keyed by the hash of
   `support/fetch-packages.mts`; a pull request restores the cache `dev`'s runs save), checks that
@@ -101,8 +101,7 @@ All are recorded in section 13 of the design document. In short:
     ordering; equality is left unchecked on purpose (see "FHIRPath operand types" in the design
     document).
   - IGs: no R4B or R5 IG has been tested; only US Core 6.1.0 on R4 has.
-  - Client: SMART `private_key_jwt` for app launch, dynamic client registration, bulk data
-    (`respond-async`), subscriptions, and tests against a real FHIR or authorization server.
+  - Client: SMART `private_key_jwt` for app launch, dynamic client registration, subscriptions, and tests against a real FHIR or authorization server.
   - The packages have no README.
 
 ## Next steps, as proposed to the user
@@ -135,8 +134,9 @@ All are recorded in section 13 of the design document. In short:
    child is an `SqlChild`: `childTable()`, the application's own SQL, or `linked()` over sqb
    entities (a `@Link().toMany(...)` field, sqb 6.3.8), mixed in one resource. Bulk Data export
    (`$export` of the server, the patients and a group) is built in the server, as decided in
-   [`decisions/bulk-export.md`](decisions/bulk-export.md), and runs over the facade. Next, to
-   choose with the user: XML or subscriptions; `$export` in the client; or, from the child steps,
+   [`decisions/bulk-export.md`](decisions/bulk-export.md), and runs over the facade; the client
+   starts one, waits for it and reads its files (`bulkExport()`). Next, to choose with the user:
+   XML or subscriptions; `_typeFilter` and a limit on exports at once; or, from the child steps,
    a composite on one child row, chains through a child's reference, a link with conditions.
 2. The repository standards that still fail (`repo-check`) are GitHub settings only, the user's
    to change: merge commits only, a ruleset on `main`, read-only default workflow permission,

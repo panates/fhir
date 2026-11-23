@@ -4,6 +4,11 @@ import {
   parseFhirJson,
   resourceTypeOf,
 } from '@fhirjs/core';
+import {
+  FhirBulkExport,
+  type FhirBulkExportOptions,
+  exportPath,
+} from './bulk-export.js';
 import { FhirClientError } from './fhir-client-error.js';
 import { type FhirSearchParams, toSearchParams } from './search-params.js';
 
@@ -391,6 +396,28 @@ export class FhirClient {
     return this._decodeOptional(r);
   }
 
+  /**
+   * Bulk Data export ($export): starts it on the server (Prefer:
+   * respond-async) and gives the export, to wait for and read
+   */
+  async bulkExport(
+    options: FhirBulkExportOptions = {},
+  ): Promise<FhirBulkExport> {
+    const { level: _l, types: _t, since: _s, params: _p, ...request } = options;
+    const r = await this.request('GET', exportPath(options), {
+      ...request,
+      headers: { ...request.headers, Prefer: 'respond-async' },
+    });
+    await r.body?.cancel();
+    const status = r.headers.get('Content-Location');
+    if (r.status !== 202 || !status)
+      throw new FhirClientError(
+        `${r.url}: the server did not start an export (${r.status}, ${status ? 'a' : 'no'} Content-Location)`,
+        r.status,
+      );
+    return new FhirBulkExport(this, status, request);
+  }
+
   /** POST [base] with a transaction Bundle: all or nothing. Gives the response Bundle. */
   async transaction<T = any>(
     bundle: object,
@@ -420,7 +447,11 @@ export class FhirClient {
   async request(
     method: string,
     path: string,
-    options: FhirRequestOptions & { body?: object | string } = {},
+    options: FhirRequestOptions & {
+      body?: object | string;
+      /** Statuses besides 2xx that are answers, not errors (429 of a status asked too often) */
+      okStatus?: readonly number[];
+    } = {},
   ): Promise<Response> {
     const url = this._url(path);
     const headers = new Headers({
@@ -450,7 +481,8 @@ export class FhirClient {
       r => this._fetch(r),
     );
     const response = await chain(request);
-    if (!response.ok) throw await this._error(response, method, url);
+    if (!response.ok && !options.okStatus?.includes(response.status))
+      throw await this._error(response, method, url);
     return response;
   }
 
