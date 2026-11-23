@@ -335,7 +335,7 @@ describe('Bulk Data export', () => {
       send('GET', path, { Prefer: prefer }).then(refusal);
     expect([
       await go('$export', ''),
-      await go('$export?_typeFilter=Observation%3Fstatus%3Dfinal'),
+      await go('$export?includeAssociatedData=LatestProvenanceResources'),
       await go('$export?_outputFormat=text/csv'),
       await go('$export?_since=yesterday'),
       await go('$export?_type=Nope'),
@@ -349,7 +349,7 @@ describe('Bulk Data export', () => {
       await go('$export-file/nope/Patient-1.ndjson'),
     ]).toEqual([
       '400 $export is asynchronous: it needs Prefer: respond-async',
-      '400 $export: _typeFilter is not supported',
+      '400 $export: includeAssociatedData is not supported',
       '400 $export: _outputFormat text/csv is not supported; application/fhir+ndjson is',
       '400 $export: _since yesterday is not an instant',
       '400 $export: Nope is not served, or not searched',
@@ -359,10 +359,247 @@ describe('Bulk Data export', () => {
       '404 No export nope',
     ]);
     // handling=lenient: what is not supported is left out
-    const r = await send('GET', '$export?_typeFilter=x&_type=Patient', {
+    const r = await send(
+      'GET',
+      '$export?includeAssociatedData=x&_type=Patient',
+      {
+        Prefer: 'respond-async, handling=lenient',
+      },
+    );
+    expect(r.status).toBe(202);
+  });
+
+  it('filters a type by _typeFilter, any of its queries; refuses one it cannot apply', async () => {
+    const { send, run, ids } = await setUp({ secure: true });
+    const system = {
+      'X-Test-Principal': JSON.stringify({ scopes: 'system/*.rs' }),
+    };
+    const filter = (f: string) => `_typeFilter=${encodeURIComponent(f)}`;
+    const go = async (path: string) => ids((await run(path, system)).files);
+    // a filtered type; another, whole
+    expect(
+      await go(
+        `$export?_type=Observation,Encounter&${filter('Observation?subject=Patient/p2')}`,
+      ),
+    ).toEqual({ Encounter: ['e1'], Observation: ['o2', 'o4'] });
+    // two queries, split at the comma before a type, or repeated: either
+    // matches, each resource once; a comma in a query stays in it
+    expect(
+      await go(
+        `$export?_type=Observation&${filter('Observation?subject=Patient/p2,Observation?performer=Patient/p1')}`,
+      ),
+    ).toEqual({ Observation: ['o2', 'o4', 'o5'] });
+    expect(
+      await go(
+        `$export?_type=Observation&${filter('Observation?_id=o1,o3')}&${filter('Observation?_id=o3,o5')}`,
+      ),
+    ).toEqual({ Observation: ['o1', 'o3', 'o5'] });
+    // with _since, and in a group's export (by subject or performer: once)
+    expect(
+      await go(
+        `Group/g1/$export?_type=Observation&${filter('Observation?_id=o1,o2,o4,o5')}`,
+      ),
+    ).toEqual({ Observation: ['o1', 'o4', 'o5'] });
+    expect(
+      await go(
+        `$export?_type=Observation&_since=2000-01-01T00:00:00Z&${filter('Observation?_id=o2')}`,
+      ),
+    ).toEqual({ Observation: ['o2'] });
+
+    // refused, lenient or not: left out, it would export more than asked
+    const refused = (q: string, extra: Record<string, string> = {}) =>
+      send('GET', `$export?${q}`, {
+        Prefer: 'respond-async',
+        ...system,
+        ...extra,
+      }).then(refusal);
+    expect([
+      await refused(filter('Observation')),
+      await refused(filter('Observation?nope=1')),
+      await refused(filter('Observation?nope=1'), {
+        Prefer: 'respond-async, handling=lenient',
+      }),
+      await refused(filter('Observation?_sort=date')),
+      await refused(`_type=Patient&${filter('Encounter?status=finished')}`),
+      await refused(filter('Observation?subject:Patient.name=x'), {
+        'X-Test-Principal': JSON.stringify({
+          scopes: 'system/Observation.rs',
+        }),
+      }),
+    ]).toEqual([
+      '400 $export: _typeFilter Observation is not [type]?[query]',
+      '400 $export: _typeFilter Observation?nope=1: Unknown search parameter nope for Observation',
+      '400 $export: _typeFilter Observation?nope=1: Unknown search parameter nope for Observation',
+      '400 $export: _typeFilter Observation?_sort=date: _sort is not a criterion',
+      '400 $export: _typeFilter Encounter?status=finished: Encounter is not exported',
+      '403 The scopes do not grant s on Patient',
+    ]);
+    // a filter of a type left out (not granted) is left out with it
+    const obsOnly = {
+      'X-Test-Principal': JSON.stringify({ scopes: 'system/Observation.rs' }),
+    };
+    const some = await run(`$export?${filter('Patient?_id=p1')}`, obsOnly);
+    expect(Object.keys(ids(some.files))).toEqual(['Observation']);
+    // lenient: a filter of a type not exported is left out
+    const lenient = await send(
+      'GET',
+      `$export?_type=Patient&${filter('Encounter?status=finished')}`,
+      { Prefer: 'respond-async, handling=lenient', ...system },
+    );
+    expect(lenient.status).toBe(202);
+  });
+
+  it('gives the elements of _elements, and those a resource must have, tagged SUBSETTED', async () => {
+    const { send, run } = await setUp();
+    const r = await run(
+      '$export?_type=Observation,Patient&_elements=Observation.status,id',
+    );
+    const lines = Object.values(r.files).flat();
+    const o1 = lines.find(x => x.id === 'o1');
+    // code is mandatory; subject is not asked
+    expect(Object.keys(o1).sort()).toEqual([
+      'code',
+      'id',
+      'meta',
+      'resourceType',
+      'status',
+    ]);
+    expect(o1.meta.tag).toEqual([
+      expect.objectContaining({ code: 'SUBSETTED' }),
+    ]);
+    expect(Object.keys(lines.find(x => x.id === 'p1')).sort()).toEqual([
+      'id',
+      'meta',
+      'resourceType',
+    ]);
+    expect(
+      await send('GET', '$export?_type=Patient&_elements=Observation.status', {
+        Prefer: 'respond-async',
+      }).then(refusal),
+    ).toBe(
+      '400 $export: _elements: Observation is not exported, or has no element status',
+    );
+    expect(
+      await send('GET', '$export?_elements=nope', {
+        Prefer: 'respond-async',
+      }).then(refusal),
+    ).toBe('400 $export: _elements: no type exported has an element nope');
+    // lenient: an unknown element is left out
+    const lenient = await run('$export?_type=Patient&_elements=nope', {
       Prefer: 'respond-async, handling=lenient',
     });
-    expect(r.status).toBe(202);
+    expect(
+      Object.values(lenient.files)
+        .flat()
+        .every(x => !x.meta.tag),
+    ).toBe(true);
+  });
+
+  it('lists the resources deleted since _since, for the export of the server', async () => {
+    const { send, run } = await setUp({ secure: true });
+    const system = {
+      'X-Test-Principal': JSON.stringify({ scopes: 'system/*.cruds' }),
+    };
+    // after the last write of the set-up, by the store's clock (MemoryStore's
+    // runs ahead of the server's)
+    const g1 = await (await send('GET', 'Group/g1', system)).json();
+    const since = encodeURIComponent(g1.meta.lastUpdated);
+    for (const [type, id] of [
+      ['Observation', 'o1'],
+      ['Observation', 'o3'],
+      ['Patient', 'p3'],
+    ])
+      expect((await send('DELETE', `${type}/${id}`, system)).status).toBe(204);
+    // o3 deleted and written again: not deleted
+    await send(
+      'PUT',
+      'Observation/o3',
+      { 'Content-Type': 'application/fhir+json', ...system },
+      obs('o3', 'p1'),
+    );
+    const r = await run(`$export?_since=${since}`, system);
+    expect(r.manifest.output.map((f: any) => f.type)).toEqual(['Observation']);
+    expect(
+      r.manifest.deleted.map((f: any) => [
+        f.type,
+        f.url.split('/').pop(),
+        f.count,
+      ]),
+    ).toEqual([
+      ['Bundle', 'Observation-deleted.ndjson', 1],
+      ['Bundle', 'Patient-deleted.ndjson', 1],
+    ]);
+    const bundles: any[] = [];
+    for (const f of r.manifest.deleted) {
+      const file = await send('GET', f.url, system);
+      bundles.push(JSON.parse(await file.text()));
+    }
+    expect(bundles).toEqual([
+      {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: [{ request: { method: 'DELETE', url: 'Observation/o1' } }],
+      },
+      {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: [{ request: { method: 'DELETE', url: 'Patient/p3' } }],
+      },
+    ]);
+    // without _since, or of the patients: none
+    expect((await run('$export?_type=Patient', system)).manifest.deleted).toBe(
+      undefined,
+    );
+    expect(
+      (await run(`Patient/$export?_since=${since}`, system)).manifest.deleted,
+    ).toBe(undefined);
+    // a caller of a patient's compartment: the deletions of resources it
+    // could see before (o1, p1's), not the others (p3)
+    const p1 = {
+      'X-Test-Principal': JSON.stringify({
+        subject: 'p',
+        scopes: 'patient/*.rs',
+        patient: 'p1',
+      }),
+    };
+    const mine = await run(`$export?_since=${since}`, p1);
+    expect(
+      mine.manifest.deleted.map((f: any) => [f.url.split('/').pop(), f.count]),
+    ).toEqual([['Observation-deleted.ndjson', 1]]);
+    const text = await (
+      await send('GET', mine.manifest.deleted[0].url, p1)
+    ).text();
+    expect(JSON.parse(text).entry).toEqual([
+      { request: { method: 'DELETE', url: 'Observation/o1' } },
+    ]);
+  });
+
+  it('runs a number of exports at once, and answers 429 past it', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const inner = new MemoryStore();
+    const store: FhirStore = Object.create(inner);
+    store.search = async (type, query) => {
+      await gate;
+      return inner.search(type, query);
+    };
+    const { send, kickOff, server } = await setUp({
+      store,
+      maxExports: 1,
+      retryAfter: 7,
+    });
+    await kickOff('$export?_type=Patient');
+    const r = await send('GET', '$export?_type=Patient', {
+      Prefer: 'respond-async',
+    });
+    expect([r.status, r.headers.get('Retry-After')]).toEqual([429, '7']);
+    expect((await r.json()).issue[0]).toMatchObject({
+      code: 'throttled',
+      diagnostics: 'The server runs 1 exports at once; ask again later',
+    });
+    release();
+    await server.bulkExport!.idle();
+    await kickOff('$export?_type=Patient');
   });
 
   it("follows the caller's scopes; only the caller sees its status and files", async () => {

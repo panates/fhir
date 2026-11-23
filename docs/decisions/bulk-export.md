@@ -71,7 +71,8 @@ parameters accepted, a type asked and not allowed left out, a file name not chec
 `_typeFilter`, `_elements`, `includeAssociatedData` and the `patient` parameter of a POST; a
 queue and workers apart from the server; a limit on exports at once (429); `$export` in the
 client (`respond-async` and the manifest); deleted resources (`_since` lists only current ones).
-_The client's side came next: see "The client"._
+_The client's side came next: see "The client"; `_typeFilter`, `_elements`, deleted resources
+and the limit after it: see "Filters, parts, deletions and a limit"._
 
 ## The client (2026-11-23)
 
@@ -102,3 +103,32 @@ Control runs, each caught: no `respond-async`, Retry-After not capped, Retry-Aft
 as an error, a signed URL read with the token, a line split across chunks dropped, the last line
 dropped, `types` ignored, `_since` not sent, an abort ignored, `X-Progress` not read, a group id
 not checked.
+
+## Filters, parts, deletions and a limit (2026-11-23)
+
+- **`_typeFilter`**: `Type?query`, repeated or split at a comma followed by a type and `?` (a
+  comma inside a query stays in it). A type's queries are ORed: each is a search, ANDed with
+  `_since`, the authorizer's criteria and a group's patients, and a resource found by more than
+  one is written once. A query is checked at the kick-off as a search of the caller: a parameter
+  the type is not searched by, or a result parameter (`_sort`, `_include` ...), is 400, and a
+  chain to a type the caller may not search is 403, **even with `handling=lenient`**: a query
+  left out would export more than was asked. A filter of a type not exported is 400 (left out
+  with `lenient`); one of a type left out for the caller goes with it.
+- **`_elements`**: `Patient.name` for one type, `id` for every type that has it, read for the
+  types exported; an element no exported type has is 400 (left out with `lenient`). A resource
+  keeps the elements asked and those it must have (`min > 0`), tagged `SUBSETTED`, as a
+  search's `_elements` gives it.
+- **Deleted resources**: an export of the server with `_since` lists in the manifest's
+  `deleted` the resources deleted since, from each type's history (a store that keeps one):
+  `Observation-deleted.ndjson`, a `transaction` Bundle of `DELETE` entries a page of history.
+  A resource is deleted when its newest version is a deletion. The caller is told of one only
+  when it may see the version before it (an authorizer that checks resources: a `patient/`
+  scope sees its patient's), since a deletion has no resource to check. Not for the patients
+  or a group: a deletion does not say whose it was.
+- **`maxExports`**: exports this process runs at once; a kick-off past it answers 429 with
+  `Retry-After` (`throttled`). No limit by default.
+- **The client**: `typeFilters: { Observation: ['status=final'] }`, `elements`, and
+  `deleted(manifest)`, which gives `{ type, id }` of the `deleted` files. A 429 of the
+  kick-off is a `FhirClientError` with its status.
+
+Tests: server 4 more (13), client 1 more (7).

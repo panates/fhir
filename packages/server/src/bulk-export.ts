@@ -11,8 +11,9 @@ import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { FhirServerError } from './fhir-server-error.js';
-import type { StoredResource } from './fhir-store.js';
+import type { StoredResource, StoredVersion } from './fhir-store.js';
 import type { FhirPrincipal, FhirRequestContext } from './security.js';
+import type { Subset } from './subset.js';
 
 /** Where the files of an export are written and read back */
 export interface ExportStorage {
@@ -62,11 +63,20 @@ export interface ExportJob {
   types: string[];
   /** _since */
   since?: string;
+  /** _typeFilter: the queries of a type, any of which a resource matches */
+  filters?: Record<string, string[]>;
+  /** _elements, as asked */
+  elements?: string[];
   /** The type being exported: 'Observation (3 of 5)' */
   progress?: string;
   output: ExportFile[];
   /** Files of OperationOutcomes: types left out, and why */
   error: ExportFile[];
+  /**
+   * Files of Bundles of the resources deleted since _since; only for an
+   * export of the server with _since
+   */
+  deleted?: ExportFile[];
   /** Why it failed */
   failure?: string;
   /** When it ended; its files are deleted `keep` after */
@@ -96,6 +106,11 @@ export interface BulkExportOptions {
   /** Seconds a client is told to wait before asking again (Retry-After, default 5) */
   retryAfter?: number;
   /**
+   * Exports this process runs at once, at most; a kick-off past it answers
+   * 429 with Retry-After. No limit when not given.
+   */
+  maxExports?: number;
+  /**
    * The patients of a group, by id: for a store without Group resources (a
    * facade's own list). The server reads the Group's `member` when not
    * given. Undefined: no such group.
@@ -119,6 +134,45 @@ export interface ExportHost {
     principal: FhirPrincipal | undefined,
     type: string,
   ): Promise<{ allowed: boolean; reason?: string; criteria?: string }>;
+  /**
+   * Checks a query of _typeFilter as a search of the caller: 400 for a
+   * parameter the type is not searched by or one of the results (_sort,
+   * _include ...), 403 for a chain to a type the caller may not search
+   */
+  filter(
+    type: string,
+    query: string,
+    context: FhirRequestContext,
+  ): Promise<void>;
+  /**
+   * _elements read for the types exported: 400 for an element no type has,
+   * when strict; undefined when it asks for no part
+   */
+  subset(
+    elements: readonly string[],
+    types: readonly string[],
+    strict: boolean,
+  ): Subset | undefined;
+  /**
+   * A page of a type's history since an instant, newest first; undefined
+   * when the store keeps none, or the caller may not read all of it
+   */
+  history(
+    type: string,
+    since: string,
+    count: number,
+    offset: number,
+    context: FhirRequestContext,
+  ): Promise<StoredVersion[] | undefined>;
+  /**
+   * Whether the caller may know of a resource deleted: one it may see the
+   * version before the deletion of
+   */
+  deletable(
+    type: string,
+    id: string,
+    context: FhirRequestContext,
+  ): Promise<boolean>;
   /** A page of a search, with the authorizer's criteria */
   search(
     type: string,
@@ -133,13 +187,19 @@ export interface ExportHost {
     id: string,
     context: FhirRequestContext,
   ): Promise<Record<string, any> | undefined>;
-  /** A stored resource as the server writes it */
-  json(s: StoredResource): Record<string, any>;
+  /** A stored resource as the server writes it, the part a subset asks for */
+  json(s: StoredResource, subset?: Subset): Record<string, any>;
 }
 
 const NDJSON = 'application/fhir+ndjson';
 const OUTPUT_FORMATS = new Set([NDJSON, 'application/ndjson', 'ndjson']);
-const SUPPORTED = new Set(['_outputFormat', '_since', '_type']);
+const SUPPORTED = new Set([
+  '_outputFormat',
+  '_since',
+  '_type',
+  '_typeFilter',
+  '_elements',
+]);
 /** Ids in one search of a group's patients */
 const BATCH = 100;
 
@@ -264,6 +324,50 @@ export class BulkExport {
       types.push(type);
     }
 
+    // _typeFilter: Type?query, repeated or split at a comma before the next type
+    const filters: Record<string, string[]> = {};
+    for (const value of params.getAll('_typeFilter'))
+      for (const f of value.split(/,(?=[A-Z][A-Za-z]*\?)/)) {
+        const m = /^([A-Z][A-Za-z]*)\?(.+)$/s.exec(f.trim());
+        if (!m)
+          throw new FhirServerError(
+            400,
+            `$export: _typeFilter ${f} is not [type]?[query]`,
+            'value',
+          );
+        const [, type, query] = m;
+        if (!types.includes(type)) {
+          // left out already, with its reason in the error files
+          if (leftOut.some(l => l.type === type) || lenient) continue;
+          throw new FhirServerError(
+            400,
+            `$export: _typeFilter ${f}: ${type} is not exported`,
+            'not-supported',
+          );
+        }
+        // a query the server cannot apply is refused, lenient or not: left
+        // out, it would export more than was asked
+        await host.filter(type, query, context);
+        (filters[type] ??= []).push(query);
+      }
+    const elements = params
+      .getAll('_elements')
+      .flatMap(v => v.split(','))
+      .map(v => v.trim())
+      .filter(Boolean);
+    if (elements.length) host.subset(elements, types, !lenient);
+
+    const max = this.options.maxExports;
+    if (max !== undefined && this._running.size >= max)
+      throw Object.assign(
+        new FhirServerError(
+          429,
+          `The server runs ${max} exports at once; ask again later`,
+          'throttled',
+        ),
+        { headers: { 'Retry-After': String(this.options.retryAfter ?? 5) } },
+      );
+
     if (
       level === 'group' &&
       (await this._members(group!, context)) === undefined
@@ -284,8 +388,13 @@ export class BulkExport {
       group,
       types,
       since,
+      filters: Object.keys(filters).length ? filters : undefined,
+      elements: elements.length ? elements : undefined,
       output: [],
       error: [],
+      // deleted resources: the history of a type says which, not whose
+      // they were, so for the server's export only
+      deleted: level === 'system' && since !== undefined ? [] : undefined,
     };
     await this._jobs.put(job);
     const running: Running = { context, cancelled: false };
@@ -345,6 +454,7 @@ export class BulkExport {
       requiresAccessToken: !storage.url && job.owner !== undefined,
       output: await files(job.output),
       error: await files(job.error),
+      ...(job.deleted && { deleted: await files(job.deleted) }),
     };
     return new Response(JSON.stringify(manifest), {
       status: 200,
@@ -379,7 +489,9 @@ export class BulkExport {
     const job = await this._own(id, principal);
     const listed =
       job.status === 'completed' &&
-      [...job.output, ...job.error].some(f => f.file === file);
+      [...job.output, ...job.error, ...(job.deleted ?? [])].some(
+        f => f.file === file,
+      );
     const body = listed && (await this.options.storage.read(job.id, file));
     if (!body) throw new FhirServerError(404, `No file ${file}`, 'not-found');
     return new Response(body, {
@@ -462,11 +574,15 @@ export class BulkExport {
         job.level === 'group'
           ? ((await this._members(job.group!, running.context)) ?? [])
           : undefined;
+      const subset = job.elements
+        ? this._host.subset(job.elements, job.types, false)
+        : undefined;
       for (const [i, type] of job.types.entries()) {
         if (running.cancelled) break;
         job.progress = `${type} (${i + 1} of ${job.types.length})`;
         await this._jobs.put(job);
-        await this._type(job, running, type, members);
+        await this._type(job, running, type, members, subset);
+        if (job.deleted) await this._deleted(job, running, type);
       }
       if (running.cancelled) {
         await this._remove(job.id);
@@ -493,6 +609,7 @@ export class BulkExport {
     running: Running,
     type: string,
     members: string[] | undefined,
+    subset: Subset | undefined,
   ): Promise<void> {
     const host = this._host;
     const storage = this.options.storage;
@@ -500,7 +617,10 @@ export class BulkExport {
     const pageSize = this.options.pageSize ?? 500;
     let writer: ExportWriter | undefined;
     let current: ExportFile | undefined;
-    const seen = members ? new Set<string>() : undefined;
+    // _typeFilter's queries, any of which a resource matches
+    const queries = job.filters?.[type] ?? [''];
+    // a resource found by more than one search is written once
+    const seen = members || queries.length > 1 ? new Set<string>() : undefined;
     const write = async (s: StoredResource) => {
       if (seen) {
         if (seen.has(s.id)) return;
@@ -516,7 +636,7 @@ export class BulkExport {
         writer = await storage.create(job.id, current.file);
         job.output.push(current);
       }
-      await writer.write(JSON.stringify(host.json(s)));
+      await writer.write(JSON.stringify(host.json(s, subset)));
       current!.count++;
     };
 
@@ -525,28 +645,30 @@ export class BulkExport {
     // no upper bound at transactionTime: a store's clock (a database's now())
     // may run ahead of the server's, and the bound would leave out what was
     // written before the kick-off, which the export must have
-    const base = () => {
-      const p = new URLSearchParams();
-      if (job.since) p.append('_lastUpdated', `gt${job.since}`);
-      return p;
-    };
-    if (!members) searches.push(base());
-    else
-      for (let i = 0; i < members.length; i += BATCH) {
-        const ids = members.slice(i, i + BATCH);
-        if (type === 'Patient') {
-          const p = base();
-          p.set('_id', ids.join(','));
-          searches.push(p);
-          continue;
+    for (const query of queries) {
+      const base = () => {
+        const p = new URLSearchParams(query);
+        if (job.since) p.append('_lastUpdated', `gt${job.since}`);
+        return p;
+      };
+      if (!members) searches.push(base());
+      else
+        for (let i = 0; i < members.length; i += BATCH) {
+          const ids = members.slice(i, i + BATCH);
+          if (type === 'Patient') {
+            const p = base();
+            p.append('_id', ids.join(','));
+            searches.push(p);
+            continue;
+          }
+          for (const param of host.compartmentParams(type)) {
+            if (!host.hasParam(type, param)) continue;
+            const p = base();
+            p.append(param, ids.map(id => `Patient/${id}`).join(','));
+            searches.push(p);
+          }
         }
-        for (const param of host.compartmentParams(type)) {
-          if (!host.hasParam(type, param)) continue;
-          const p = base();
-          p.set(param, ids.map(id => `Patient/${id}`).join(','));
-          searches.push(p);
-        }
-      }
+    }
 
     try {
       for (const params of searches) {
@@ -566,6 +688,66 @@ export class BulkExport {
           )
             break;
         }
+      }
+    } finally {
+      await writer?.close();
+    }
+  }
+
+  /**
+   * The resources of a type deleted since _since, as Bundles of DELETE
+   * entries, a Bundle a page of its history: a resource whose newest
+   * version is a deletion
+   */
+  private async _deleted(
+    job: ExportJob,
+    running: Running,
+    type: string,
+  ): Promise<void> {
+    const pageSize = this.options.pageSize ?? 500;
+    const seen = new Set<string>();
+    let writer: ExportWriter | undefined;
+    let file: ExportFile | undefined;
+    try {
+      for (let offset = 0; ; offset += pageSize) {
+        if (running.cancelled) return;
+        const page = await this._host.history(
+          type,
+          job.since!,
+          pageSize,
+          offset,
+          running.context,
+        );
+        if (!page) return;
+        const gone: string[] = [];
+        // newest first: the first version of an id is its newest
+        for (const v of page) {
+          if (v.type !== type || seen.has(v.id)) continue;
+          seen.add(v.id);
+          if (
+            v.method === 'DELETE' &&
+            (await this._host.deletable(type, v.id, running.context))
+          )
+            gone.push(v.id);
+        }
+        if (gone.length) {
+          if (!writer) {
+            file = { type: 'Bundle', file: `${type}-deleted.ndjson`, count: 0 };
+            writer = await this.options.storage.create(job.id, file.file);
+            job.deleted!.push(file);
+          }
+          await writer.write(
+            JSON.stringify({
+              resourceType: 'Bundle',
+              type: 'transaction',
+              entry: gone.map(id => ({
+                request: { method: 'DELETE', url: `${type}/${id}` },
+              })),
+            }),
+          );
+          file!.count++;
+        }
+        if (page.length < pageSize) return;
       }
     } finally {
       await writer?.close();

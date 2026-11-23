@@ -38,7 +38,7 @@ import {
   type SearchValue,
   type SearchSort,
 } from './search-query.js';
-import { subsetOf, subsetted } from './subset.js';
+import { exportSubset, subsetOf, subsetted } from './subset.js';
 
 /** A step around each exchange: (request, next) => response, as in the client */
 export type FhirServerInterceptor = (
@@ -2049,9 +2049,60 @@ export class FhirServer {
           for (const [k, v] of new URLSearchParams(d.criteria))
             all.append(k, v);
         const { query } = this._query(all, type, served, '', true);
+        // a chain of _typeFilter goes through the authorizer, as in a search
+        await this._authorizeChains({ context } as Exchange, query.criteria);
         query.count = count;
         query.offset = offset;
         return served.store.search!(type, query, context);
+      },
+      filter: async (type, q, context) => {
+        const params = new URLSearchParams(q);
+        for (const name of params.keys())
+          if (RESULT_PARAMS.has(name.split(':')[0]))
+            throw new FhirServerError(
+              400,
+              `$export: _typeFilter ${type}?${q}: ${name} is not a criterion`,
+              'not-supported',
+            );
+        let query: SearchQuery;
+        try {
+          query = this._query(params, type, searchable(type)!, '', true).query;
+        } catch (e) {
+          if (e instanceof FhirServerError)
+            throw new FhirServerError(
+              e.status,
+              `$export: _typeFilter ${type}?${q}: ${e.message}`,
+              e.issues[0].code,
+            );
+          throw e;
+        }
+        await this._authorizeChains({ context } as Exchange, query.criteria);
+      },
+      subset: (elements, types, strict) =>
+        exportSubset(elements, types, this.fhir, strict),
+      history: async (type, since, count, offset, context) => {
+        const served = this._served.get(type);
+        if (
+          !served?.caps.interactions.includes('history') ||
+          typeof served.store.history !== 'function'
+        )
+          return;
+        const authorizer = this.options.security?.authorizer;
+        if (authorizer) {
+          const d = await authorizer.authorize({
+            principal: context.principal,
+            interaction: 'history',
+            type,
+          });
+          if (!d.allowed) return;
+        }
+        const page = await served.store.history(
+          type,
+          undefined,
+          { since, count, offset },
+          context,
+        );
+        return page.items;
       },
       read: async (type, id, context) => {
         const served = this._served.get(type);
@@ -2067,7 +2118,28 @@ export class FhirServer {
         if (!(await this._may(ctx, 'read', type, s.resource))) return;
         return s.resource;
       },
-      json: s => this._json(s),
+      deletable: async (type, id, context) => {
+        const authorizer = this.options.security?.authorizer;
+        if (!authorizer) return true;
+        const d = await decision(context.principal, type);
+        if (!d.allowed) return false;
+        if (!authorizer.authorizeResource) return !d.criteria;
+        // a deletion has no resource: the caller may know of it when it may
+        // see the version before it (a patient's, for a patient/ scope)
+        const served = this._served.get(type)!;
+        const versions = await served.store.history!(
+          type,
+          id,
+          { count: 2, offset: 0 },
+          context,
+        );
+        const before = versions.items.find(v => v.resource)?.resource;
+        return (
+          !!before && this._may({ context } as Exchange, 'search', type, before)
+        );
+      },
+      json: (s, subset) =>
+        subset ? subsetted(this._json(s), subset, this.fhir) : this._json(s),
     };
   }
 
