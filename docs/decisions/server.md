@@ -627,4 +627,4 @@ time. 330 tests before, 335 after.
 ## Not in the first version
 
 XML,
-subscriptions, bulk data.
+subscriptions, bulk data. _Bulk Data export is built: see [`bulk-export.md`](bulk-export.md)._

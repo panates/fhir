@@ -16,7 +16,7 @@ the work and what is open are in [`docs/HANDOVER.md`](docs/HANDOVER.md).
 | `packages/fhirpath`        | `@fhirjs/fhirpath`                        | FHIRPath: lexer, Pratt parser, evaluator, `check()`. No dependency                                                           |
 | `packages/r4`, `r4b`, `r5` | `@fhirjs/r4`, `@fhirjs/r4b`, `@fhirjs/r5` | Generated classes of FHIR 4.0.1, 4.3.0 and 5.0.0                                                                             |
 | `packages/client`          | `@fhirjs/client`                          | REST client, SMART on FHIR                                                                                                   |
-| `packages/server`          | `@fhirjs/server`                          | REST server: a fetch-style handler over stores per resource type ([design](docs/decisions/server.md))                        |
+| `packages/server`          | `@fhirjs/server`                          | REST server: a fetch-style handler over stores per resource type ([design](docs/decisions/server.md)), Bulk Data `$export`   |
 | `packages/smart`           | `@fhirjs/smart`                           | JWT verification (JWK Sets, key rotation) and SMART scopes, for the client and the server. No dependency                     |
 | `packages/sql`             | `@fhirjs/sql`                             | A store over an existing SQL database, described table by table, on sqb (a peer dependency). PostgreSQL                      |
 | `support/`                 |                                           | `build-models.mts` (the generator), `fetch-packages.mts`, benchmarks                                                         |
@@ -42,7 +42,7 @@ a feature branch: open a pull request to get a run.
 ## Rules and traps
 
 - **Run `pnpm fetch-packages` before you measure.** Without it the tests that need the HL7
-  packages are skipped, and the test count is not the real one (336 with them; 365 when
+  packages are skipped, and the test count is not the real one (345 with them; 376 when
   `FHIR_PG_URL` names a PostgreSQL database for `@fhirjs/sql` and the facade example, as in CI).
 - **Tag a slow test `#slow`** at the end of its title: one that runs over every example of a
   version or takes about a second or more. CI runs the tagged tests in a second job, in parallel

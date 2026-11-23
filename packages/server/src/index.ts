@@ -1,3 +1,4 @@
+export * from './bulk-export.js';
 export * from './fhir-server.js';
 export * from './fhir-server-error.js';
 export type * from './fhir-store.js';

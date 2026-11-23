@@ -6,6 +6,11 @@ import {
   parseFhirJson,
   rawDecimal,
 } from '@fhirjs/core';
+import {
+  BulkExport,
+  type BulkExportOptions,
+  type ExportHost,
+} from './bulk-export.js';
 import { type FhirOutcomeIssue, FhirServerError } from './fhir-server-error.js';
 import type {
   FhirStore,
@@ -72,6 +77,11 @@ export interface FhirServerOptions {
   security?: FhirSecurityOptions;
   /** Called with an error the server did not expect; the client gets a 500 */
   onError?: (error: unknown, request: Request) => void;
+  /**
+   * Bulk Data export ($export of the server, the patients and a group),
+   * with where its files go. Not served when not given.
+   */
+  bulkExport?: BulkExportOptions;
 }
 
 /** A type the server serves, with its store and what the store declared */
@@ -85,6 +95,8 @@ interface Served {
 }
 
 const FHIR_JSON = 'application/fhir+json';
+/** The Bulk Data Access IG */
+const BULK_DATA = 'http://hl7.org/fhir/uv/bulkdata';
 const JSON_TYPES = new Set([
   FHIR_JSON,
   'application/json',
@@ -144,6 +156,8 @@ export class FhirServer {
   private readonly _handle: (request: Request) => Promise<Response>;
   private readonly _date = new Date().toISOString();
   private readonly _matcher: SearchMatcher;
+  /** $export, when the options give it */
+  readonly bulkExport?: BulkExport;
 
   constructor(readonly options: FhirServerOptions) {
     this.fhir = options.fhir;
@@ -170,6 +184,8 @@ export class FhirServer {
       else if (options.resources)
         throw new TypeError(`The store does not serve ${type}`);
     }
+    if (options.bulkExport)
+      this.bulkExport = new BulkExport(options.bulkExport, this._exportHost());
     this._handle = (options.interceptors ?? []).reduceRight<
       (r: Request) => Promise<Response>
     >(
@@ -216,11 +232,13 @@ export class FhirServer {
         );
       path = path.slice(this.base.length);
     }
-    checkFormat(request, url);
     const seg = path
       .split('/')
       .filter(Boolean)
       .map(s => decodeURIComponent(s));
+    // an export's files are NDJSON
+    if (!(this.bulkExport && seg[0] === '$export-file'))
+      checkFormat(request, url);
     const method = request.method.toUpperCase();
     const ctx: Exchange = {
       request,
@@ -255,6 +273,10 @@ export class FhirServer {
     }
     // everything else needs a caller, when the server has security
     ctx.context.principal = await this._authenticate(ctx);
+    if (this.bulkExport) {
+      const answer = await this._export(ctx, seg);
+      if (answer) return answer;
+    }
     if (!seg.length) {
       if (method !== 'POST') throw notAllowed(method, 'the server base');
       return this._bundle(ctx);
@@ -1946,6 +1968,110 @@ export class FhirServer {
   }
 
   /* ---------------------------------------------------------------- */
+  /* Bulk Data export                                                 */
+  /* ---------------------------------------------------------------- */
+
+  /** $export, its status and its files; undefined for another path */
+  private async _export(
+    ctx: Exchange,
+    seg: string[],
+  ): Promise<Response | undefined> {
+    const x = this.bulkExport!;
+    const { method } = ctx;
+    const principal = ctx.context.principal;
+    const kickOff = (level: 'system' | 'patient' | 'group', group?: string) => {
+      if (method !== 'GET' && method !== 'POST')
+        throw notAllowed(method, '$export');
+      return x.kickOff(
+        ctx.request,
+        ctx.url,
+        ctx.baseUrl,
+        ctx.context,
+        level,
+        group,
+      );
+    };
+    if (seg.length === 1 && seg[0] === '$export') return kickOff('system');
+    if (seg.length === 2 && seg[0] === 'Patient' && seg[1] === '$export')
+      return kickOff('patient');
+    if (seg.length === 3 && seg[0] === 'Group' && seg[2] === '$export') {
+      if (!ID.test(seg[1]))
+        throw new FhirServerError(400, `"${seg[1]}" is not an id`, 'value');
+      return kickOff('group', seg[1]);
+    }
+    if (seg.length === 2 && seg[0] === '$export-status') {
+      if (method === 'GET') return x.status(seg[1], ctx.baseUrl, principal);
+      if (method === 'DELETE') return x.cancel(seg[1], principal);
+      throw notAllowed(method, 'an export');
+    }
+    if (seg.length === 3 && seg[0] === '$export-file') {
+      if (method !== 'GET') throw notAllowed(method, 'an export file');
+      return x.file(seg[1], seg[2], principal);
+    }
+    return;
+  }
+
+  /** What $export asks of the server: searches as the caller of the kick-off */
+  private _exportHost(): ExportHost {
+    const searchable = (type: string) => {
+      const served = this._served.get(type);
+      return served &&
+        served.caps.interactions.includes('search') &&
+        typeof served.store.search === 'function'
+        ? served
+        : undefined;
+    };
+    const decision = (principal: FhirPrincipal | undefined, type: string) =>
+      this.options.security?.authorizer
+        ? this.options.security.authorizer.authorize({
+            principal,
+            interaction: 'search',
+            type,
+          })
+        : Promise.resolve<FhirAccessDecision>({ allowed: true });
+    return {
+      searchable: () => [...this._served.keys()].filter(t => searchable(t)),
+      hasParam: (type, code) => !!searchable(type)?.params.has(code),
+      compartmentParams: type =>
+        this.fhir.model.compartmentParams('Patient', type) ?? [],
+      authorize: decision,
+      search: async (type, params, count, offset, context) => {
+        const served = searchable(type)!;
+        const d = await decision(context.principal, type);
+        if (!d.allowed)
+          throw new FhirServerError(
+            403,
+            d.reason ?? `Export of ${type} is not allowed`,
+            'forbidden',
+          );
+        const all = new URLSearchParams(params);
+        if (d.criteria)
+          for (const [k, v] of new URLSearchParams(d.criteria))
+            all.append(k, v);
+        const { query } = this._query(all, type, served, '', true);
+        query.count = count;
+        query.offset = offset;
+        return served.store.search!(type, query, context);
+      },
+      read: async (type, id, context) => {
+        const served = this._served.get(type);
+        if (
+          !served?.caps.interactions.includes('read') ||
+          typeof served.store.read !== 'function'
+        )
+          return;
+        const ctx = { context } as Exchange;
+        if (!(await this._decision(ctx, 'read', type, id)).allowed) return;
+        const s = await served.store.read(type, id, context);
+        if (!s?.resource) return;
+        if (!(await this._may(ctx, 'read', type, s.resource))) return;
+        return s.resource;
+      },
+      json: s => this._json(s),
+    };
+  }
+
+  /* ---------------------------------------------------------------- */
   /* Capabilities                                                     */
   /* ---------------------------------------------------------------- */
 
@@ -1988,6 +2114,11 @@ export class FhirServer {
               'http://hl7.org/fhir/OperationDefinition/Resource-validate',
           },
         ];
+        if (this.bulkExport && (type === 'Patient' || type === 'Group'))
+          r.operation.push({
+            name: 'export',
+            definition: `${BULK_DATA}/OperationDefinition/${type === 'Patient' ? 'patient' : 'group'}-export`,
+          });
         return r;
       },
     );
@@ -2026,6 +2157,13 @@ export class FhirServer {
         ];
     }
     rest.resource = resource;
+    if (this.bulkExport)
+      rest.operation = [
+        {
+          name: 'export',
+          definition: `${BULK_DATA}/OperationDefinition/export`,
+        },
+      ];
     rest.interaction = [{ code: 'batch' }];
     if (this._main.transaction) rest.interaction.push({ code: 'transaction' });
     if (
@@ -2038,6 +2176,9 @@ export class FhirServer {
       status: 'active',
       date: this._date,
       kind: 'instance',
+      ...(this.bulkExport && {
+        instantiates: [`${BULK_DATA}/CapabilityStatement/bulk-data`],
+      }),
       software: { name: this.options.name ?? '@fhirjs/server' },
       implementation: { description: 'FHIR server', url: baseUrl },
       fhirVersion: this.fhir.model.fhirVersion,
