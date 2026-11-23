@@ -11,7 +11,7 @@ say: how to work in the repository, what is open, and what to watch for.
   and [panates/fhir#2](https://github.com/panates/fhir/pull/2) (CI and the repository
   standards) are merged into `dev`. `dev` did not exist before this work and was made from
   `main`.
-- 351 tests pass (`pnpm test`), 382 with `FHIR_PG_URL`; type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
+- 356 tests pass (`pnpm test`), 387 with `FHIR_PG_URL`; type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).
 - CI: `.github/workflows/test.yml` runs on pull requests into `dev` and on pushes to `dev`. It
   builds, checks the types of the tests, fetches the HL7 packages (cached, keyed by the hash of
   `support/fetch-packages.mts`; a pull request restores the cache `dev`'s runs save), checks that
@@ -135,9 +135,10 @@ All are recorded in section 13 of the design document. In short:
    entities (a `@Link().toMany(...)` field, sqb 6.3.8), mixed in one resource. Bulk Data export
    (`$export` of the server, the patients and a group) is built in the server, as decided in
    [`decisions/bulk-export.md`](decisions/bulk-export.md), and runs over the facade; the client
-   starts one, waits for it and reads its files (`bulkExport()`). Next, to choose with the user:
-   XML or subscriptions; `_typeFilter` and a limit on exports at once; or, from the child steps,
-   a composite on one child row, chains through a child's reference, a link with conditions.
+   starts one, waits for it and reads its files (`bulkExport()`); `_typeFilter`, `_elements`, the
+   resources deleted since `_since` and a limit on exports at once came next. Next, to choose
+   with the user: XML or subscriptions; or, from the child steps, a composite on one child row,
+   chains through a child's reference, a link with conditions.
 2. The repository standards that still fail (`repo-check`) are GitHub settings only, the user's
    to change: merge commits only, a ruleset on `main`, read-only default workflow permission,
    Dependabot alerts, secret scanning and push protection.

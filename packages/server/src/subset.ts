@@ -81,6 +81,45 @@ export function subsetOf(
   return out.size ? { elements: out } : undefined;
 }
 
+/**
+ * `_elements` of a Bulk Data export, read for the types it exports: an
+ * element without a type (`id`) is one of every type that has it,
+ * `Patient.name` one of Patient only. Throws 400, when strict, for an
+ * element no type exported has. Undefined when none is known.
+ */
+export function exportSubset(
+  elements: readonly string[],
+  types: readonly string[],
+  fhir: FhirContext,
+  strict: boolean,
+): Subset | undefined {
+  const model = fhir.model;
+  const out = new Map<string, Set<string>>();
+  for (const item of elements) {
+    const dot = item.indexOf('.');
+    const of = dot < 0 ? '*' : item.slice(0, dot);
+    const name = (dot < 0 ? item : item.slice(dot + 1)).replace(/\[x\]$/, '');
+    const known =
+      of === '*'
+        ? types.some(t => hasElement(model.getType(t), name))
+        : types.includes(of) && hasElement(model.getType(of), name);
+    if (!known) {
+      if (strict)
+        throw new FhirServerError(
+          400,
+          of === '*'
+            ? `$export: _elements: no type exported has an element ${name}`
+            : `$export: _elements: ${of} is not exported, or has no element ${name}`,
+          'value',
+        );
+      continue;
+    }
+    if (!out.has(of)) out.set(of, new Set());
+    out.get(of)!.add(name);
+  }
+  return out.size ? { elements: out } : undefined;
+}
+
 /** A resource as a subset asks for it, tagged SUBSETTED; the resource itself when the subset keeps it whole */
 export function subsetted(
   resource: Record<string, any>,

@@ -14,7 +14,14 @@ export interface FhirBulkExportOptions extends FhirRequestOptions {
   types?: readonly string[];
   /** _since: what changed after this instant */
   since?: string | Date;
-  /** More kick-off parameters (_typeFilter, _elements ...), as the server takes them */
+  /**
+   * _typeFilter: the searches of a type, a resource of it exported when it
+   * matches one of them: `{ Observation: ['status=final&category=vital-signs'] }`
+   */
+  typeFilters?: Record<string, string | readonly string[]>;
+  /** _elements: these elements only (`id`, `Patient.name`), and those every resource must have */
+  elements?: readonly string[];
+  /** More kick-off parameters (includeAssociatedData ...), as the server takes them */
   params?: Record<string, string | readonly string[]>;
 }
 
@@ -34,6 +41,14 @@ export interface FhirBulkManifest {
   output: FhirBulkFile[];
   /** Files of OperationOutcomes */
   error: FhirBulkFile[];
+  /** Files of Bundles of the resources deleted since _since, when the server gives them */
+  deleted?: FhirBulkFile[];
+}
+
+/** A resource deleted since _since */
+export interface FhirBulkDeleted {
+  type: string;
+  id: string;
 }
 
 /** Where an export stands */
@@ -148,6 +163,21 @@ export class FhirBulkExport {
     for (const file of manifest.error) yield* this.read(file, manifest, signal);
   }
 
+  /** The resources deleted since _since, of the manifest's `deleted` files */
+  async *deleted(
+    manifest: FhirBulkManifest,
+    signal?: AbortSignal,
+  ): AsyncGenerator<FhirBulkDeleted> {
+    for (const file of manifest.deleted ?? [])
+      for await (const bundle of this.read<any>(file, manifest, signal, true))
+        for (const e of bundle.entry ?? []) {
+          const m = /^([A-Za-z]+)\/([A-Za-z0-9\-.]{1,64})$/.exec(
+            e.request?.method === 'DELETE' ? (e.request.url ?? '') : '',
+          );
+          if (m) yield { type: m[1], id: m[2] };
+        }
+  }
+
   /**
    * The resources of one file. One that needs the token is read through the
    * client (its interceptors, on its server only); another (a signed URL of
@@ -157,6 +187,8 @@ export class FhirBulkExport {
     file: FhirBulkFile,
     manifest: FhirBulkManifest,
     signal?: AbortSignal,
+    /** As parsed, not decoded with the codec */
+    raw = false,
   ): AsyncGenerator<T> {
     signal ??= this.options.signal;
     let r: Response;
@@ -179,8 +211,10 @@ export class FhirBulkExport {
         );
       }
     }
-    for await (const line of lines(r))
-      yield this.client.decodeJson<T>(parseFhirJson(line));
+    for await (const line of lines(r)) {
+      const json = parseFhirJson(line);
+      yield raw ? (json as T) : this.client.decodeJson<T>(json);
+    }
   }
 }
 
@@ -204,6 +238,10 @@ export function exportPath(options: FhirBulkExportOptions): string {
         ? options.since.toISOString()
         : options.since,
     );
+  for (const [type, queries] of Object.entries(options.typeFilters ?? {}))
+    for (const query of typeof queries === 'string' ? [queries] : queries)
+      q.append('_typeFilter', `${type}?${query}`);
+  if (options.elements?.length) q.set('_elements', options.elements.join(','));
   for (const [k, v] of Object.entries(options.params ?? {}))
     for (const x of typeof v === 'string' ? [v] : v) q.append(k, x);
   return q.size ? `${path}?${q}` : path;

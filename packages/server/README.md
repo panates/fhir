@@ -128,7 +128,9 @@ restricts it further.
 `$export` of the server, of the patients and of a group (Bulk Data Access IG 2.0), as NDJSON
 files: a kick-off with `Prefer: respond-async` answers 202 and a status URL, which answers 202
 until the manifest of the files. The export runs in the server's process through the store's
-search, a page at a time, as the caller of the kick-off.
+search, a page at a time, as the caller of the kick-off. It takes `_type`, `_since`,
+`_typeFilter` and `_elements`, lists the resources deleted since `_since` in an export of the
+server, and runs `maxExports` at once (429 past it).
 
 ```ts
 import { FileExportStorage } from '@fhirjs/server';
@@ -139,6 +141,7 @@ new FhirServer({
   bulkExport: {
     storage: new FileExportStorage('/var/lib/fhir/export'), // or an object store of your own
     groupMembers: async id => wardPatients(id), // a group without a Group resource
+    maxExports: 4,
   },
 });
 ```

@@ -73,6 +73,7 @@ async function serverWith(
     secure?: boolean;
     store?: FhirStore;
     storage?: ExportStorage;
+    maxExports?: number;
   } = {},
 ) {
   const server = new FhirServer({
@@ -84,6 +85,7 @@ async function serverWith(
       storage: options.storage ?? new MemoryExportStorage(),
       fileSize: 2,
       retryAfter: 0,
+      maxExports: options.maxExports,
     },
     ...(options.secure && {
       security: {
@@ -211,16 +213,81 @@ describe('FhirClient.bulkExport()', () => {
       `${BASE}/Patient/$export?_type=Patient`,
     );
     const e = await c
-      .bulkExport({ params: { _typeFilter: 'Observation?status=final' } })
+      .bulkExport({ params: { includeAssociatedData: 'x' } })
       .catch(x => x);
     expect(e).toBeInstanceOf(FhirClientError);
     expect([e.status, e.diagnostics]).toEqual([
       400,
-      ['$export: _typeFilter is not supported'],
+      ['$export: includeAssociatedData is not supported'],
     ]);
     await expect(c.bulkExport({ level: { group: '../x' } })).rejects.toThrow(
       '"../x" is not a FHIR id',
     );
+  });
+
+  it('sends _typeFilter and _elements; reads the deletions; a 429 of the kick-off is an error', async () => {
+    const { fetch, sent } = await serverWith();
+    const c = client(fetch);
+    const filtered = await c.bulkExport({
+      types: ['Observation'],
+      typeFilters: { Observation: ['subject=Patient/p2', '_id=o1,o3'] },
+    });
+    const kickOff = new URL(sent.find(r => r.url.includes('/$export?'))!.url);
+    expect(kickOff.searchParams.getAll('_typeFilter')).toEqual([
+      'Observation?subject=Patient/p2',
+      'Observation?_id=o1,o3',
+    ]);
+    expect(
+      idsByType(await collect(filtered.resources(await filtered.wait()))),
+    ).toEqual({ Observation: ['o1', 'o2', 'o3'] });
+    const one = await c.bulkExport({
+      types: ['Observation'],
+      typeFilters: { Observation: 'subject=Patient/p1' },
+    });
+    expect(idsByType(await collect(one.resources(await one.wait())))).toEqual({
+      Observation: ['o1', 'o3'],
+    });
+
+    const subset = await c.bulkExport({
+      types: ['Patient', 'Observation'],
+      elements: ['id', 'Observation.status'],
+    });
+    const parts = await collect(subset.resources(await subset.wait()));
+    const o1 = parts.find(r => r.id === 'o1');
+    expect([o1.status, o1.subject, o1.meta.tag[0].code]).toEqual([
+      'final',
+      undefined,
+      'SUBSETTED',
+    ]);
+
+    // after the last write, by the store's clock; then a deletion
+    const g1 = await (await c.request('GET', 'Group/g1')).json();
+    await (await c.request('DELETE', 'Observation/o2')).body?.cancel();
+    const since = await c.bulkExport({ since: g1.meta.lastUpdated });
+    const manifest = await since.wait();
+    expect(manifest.output).toEqual([]);
+    expect(await collect(since.deleted(manifest))).toEqual([
+      { type: 'Observation', id: 'o2' },
+    ]);
+    // a manifest without deletions: none
+    expect(await collect(one.deleted(await one.wait()))).toEqual([]);
+
+    // the server's limit on exports at once
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const inner = new MemoryStore();
+    const store: FhirStore = Object.create(inner);
+    store.search = async (type, query) => {
+      await gate;
+      return inner.search(type, query);
+    };
+    const busy = await serverWith({ store, maxExports: 1 });
+    const b = client(busy.fetch);
+    await b.bulkExport({ types: ['Patient'] });
+    const e = await b.bulkExport({ types: ['Patient'] }).catch(x => x);
+    expect([e.constructor.name, e.status]).toEqual(['FhirClientError', 429]);
+    release();
+    await busy.server.bulkExport!.idle();
   });
 
   it('reports its progress while it runs; a cancel stops it', async () => {
