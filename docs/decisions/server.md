@@ -127,7 +127,8 @@ interface StoreCapabilities {
 - **Codes.** An existing database's local codes are mapped to standard ones (LOINC, SNOMED CT,
   ICD-10) by the facade, by hand or through a `ConceptMap`; the server does not translate codes.
 - `MemoryStore` declares everything, with `versions: 'all'`. A helper for SQL facades (on sqb)
-  may follow once a first real facade is written; it is not designed before that.
+  may follow once a first real facade is written; it is not designed before that. The first
+  facade is designed in [`facade-store.md`](facade-store.md).
 - `SearchQuery` is parsed and typed, not the URL: each parameter with its definition, modifier,
   prefix and values, plus `_sort`, `_count` and the page. `MemoryStore` evaluates it with the
   FHIRPath expression of each parameter; a database store translates it.
