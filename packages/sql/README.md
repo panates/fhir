@@ -119,7 +119,9 @@ Patient: {
 ```
 
 A composite whose parts are on one child (an observation's components) matches on one row of it,
-and a reference on a child's rows (a care team's GPs) is followed by chains and `_has`.
+and a reference on a child's rows (a care team's GPs) is followed by chains and `_has`. A child's
+rows can have children of their own (an address's lines: `child('addresses.lines', ...)`), and
+`linked()` follows a link of more than one hop, read and searched.
 
 [`examples/facade`](../../examples/facade) describes an EMR's tables this way, and the design is
 in [`docs/decisions/sql-facade.md`](../../docs/decisions/sql-facade.md).
