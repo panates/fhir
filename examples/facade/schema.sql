@@ -1,0 +1,59 @@
+-- An EMR's own tables, not shaped as FHIR: the facade maps them (docs/decisions/facade-store.md).
+-- Searches need the unaccent extension in the public schema.
+
+create table patients (
+  id             bigint generated always as identity primary key,
+  mrn            text not null unique,        -- medical record number
+  national_id    text unique,
+  first_name     text not null,
+  middle_name    text,
+  last_name      text not null,
+  gender         char(1) not null,            -- M, F, O, U
+  birth_date     date,
+  deceased_at    timestamptz,
+  phone          text,
+  email          text,
+  address_line   text,
+  city           text,
+  postal_code    text,
+  country        text,
+  active         boolean not null default true,
+  updated_at     timestamptz not null default now()
+);
+
+create table encounters (
+  id             bigint generated always as identity primary key,
+  encounter_no   text not null unique,
+  patient_id     bigint not null references patients,
+  kind           text not null,               -- inpatient, outpatient, emergency
+  status         text not null,               -- planned, in_progress, finished, cancelled
+  admitted_at    timestamptz,
+  discharged_at  timestamptz,
+  department     text,
+  physician      text,
+  diagnosis_code text,                        -- ICD-10
+  updated_at     timestamptz not null default now()
+);
+
+create table lab_tests (                      -- the catalogue
+  code           text primary key,            -- LOINC
+  name           text not null,
+  unit           text                         -- UCUM
+);
+
+create table lab_results (
+  id             bigint generated always as identity primary key,
+  patient_id     bigint not null references patients,
+  encounter_id   bigint references encounters,
+  test_code      text not null references lab_tests,
+  value_numeric  numeric,
+  value_text     text,
+  unit           text,
+  ref_low        numeric,
+  ref_high       numeric,
+  flag           char(1),                     -- H, L, N
+  status         text not null,               -- registered, preliminary, final, amended, cancelled
+  collected_at   timestamptz,
+  reported_at    timestamptz,
+  updated_at     timestamptz not null default now()
+);

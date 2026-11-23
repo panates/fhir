@@ -1,6 +1,10 @@
 {
   "extends": "./tsconfig-base.json",
-  "include": ["./packages/*/test/**/*.*", "./packages/*/src/**/*.*"],
+  "include": [
+    "./packages/*/test/**/*.*",
+    "./packages/*/src/**/*.*",
+    "./examples/facade/**/*.ts"
+  ],
   "compilerOptions": {
     "composite": false,
     "incremental": false,
