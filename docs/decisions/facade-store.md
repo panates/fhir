@@ -1,0 +1,248 @@
+# A first facade store
+
+The design of a first store over a real database: an EMR's own tables, mapped to FHIR on the way
+out, with searches translated to SQL. It is written before the code, to find what a SQL helper
+for facades would need. [`server.md`](server.md) leaves that helper until a first real facade
+exists ("A helper for SQL facades (on sqb) may follow once a first real facade is written").
+
+## Decided (2026-11-22)
+
+| Question       | Decision                                                                                          | Why                                                                                                                                                             |
+| -------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database       | A small PostgreSQL schema of our own, shaped like an EMR, with English column names and seed data | It runs in CI and on any machine, and it is the shape a facade usually meets: rows and columns close to FHIR without being FHIR.                                |
+| Where it lives | `examples/facade`, run by tests; nothing published                                                | The parts worth reusing become a package once they are seen, not before.                                                                                        |
+| SQL layer      | sqb (`@sqb/builder`, `@sqb/connect`, `@sqb/postgres`)                                             | Panates' own builder; the later helper is built on it. Conditions are built as objects, so a parsed criterion becomes a condition without string concatenation. |
+| Scope          | Patient, Encounter and Observation (lab results): read and search, no writes                      | Three tables with references between them test chains, `_has` and a composite (`code-value-quantity`). Writes come after the reads have shown how mapping goes. |
+
+## The schema
+
+```sql
+create table patients (
+  id             bigint generated always as identity primary key,
+  mrn            text not null unique,        -- medical record number
+  national_id    text unique,
+  first_name     text not null,
+  middle_name    text,
+  last_name      text not null,
+  gender         char(1) not null,            -- M, F, O, U
+  birth_date     date,
+  deceased_at    timestamptz,
+  phone          text,
+  email          text,
+  address_line   text,
+  city           text,
+  postal_code    text,
+  country        text,
+  active         boolean not null default true,
+  updated_at     timestamptz not null default now()
+);
+
+create table encounters (
+  id             bigint generated always as identity primary key,
+  encounter_no   text not null unique,
+  patient_id     bigint not null references patients,
+  kind           text not null,               -- inpatient, outpatient, emergency
+  status         text not null,               -- planned, in_progress, finished, cancelled
+  admitted_at    timestamptz,
+  discharged_at  timestamptz,
+  department     text,
+  physician      text,
+  diagnosis_code text,                        -- ICD-10
+  updated_at     timestamptz not null default now()
+);
+
+create table lab_tests (                      -- the catalogue
+  code           text primary key,            -- LOINC
+  name           text not null,
+  unit           text                         -- UCUM
+);
+
+create table lab_results (
+  id             bigint generated always as identity primary key,
+  patient_id     bigint not null references patients,
+  encounter_id   bigint references encounters,
+  test_code      text not null references lab_tests,
+  value_numeric  numeric,
+  value_text     text,
+  unit           text,
+  ref_low        numeric,
+  ref_high       numeric,
+  flag           char(1),                     -- H, L, N
+  status         text not null,               -- registered, preliminary, final, amended, cancelled
+  collected_at   timestamptz,
+  reported_at    timestamptz,
+  updated_at     timestamptz not null default now()
+);
+```
+
+The columns differ from FHIR on purpose: codes of its own (`M`, `in_progress`, `inpatient`), a
+name in three columns, an address in one line, a result's value in two columns, the test's name
+in another table. Seed data: about 20 patients, 40 encounters and 200 results, with the cases a
+search must tell apart (a family name that is a prefix of another, a patient with no birth date,
+results with and without a unit, a deceased patient).
+
+## The mapping
+
+| FHIR                                                 | From                                                                                       |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `Patient.id`                                         | `patients.id`, as text                                                                     |
+| `Patient.identifier`                                 | `mrn` (system `urn:example:mrn`), `national_id` (system `urn:example:national-id`)         |
+| `Patient.name`                                       | `last_name` as `family`; `first_name` and `middle_name` as `given`                         |
+| `Patient.gender`                                     | `M` male, `F` female, `O` other, `U` unknown                                               |
+| `Patient.birthDate`, `deceasedDateTime`              | `birth_date`, `deceased_at`                                                                |
+| `Patient.telecom`, `address`                         | `phone`, `email`; `address_line`, `city`, `postal_code`, `country`                         |
+| `Patient.active`, `meta.lastUpdated`                 | `active`, `updated_at`                                                                     |
+| `Encounter.identifier`, `subject`                    | `encounter_no`; `Patient/{patient_id}`                                                     |
+| `Encounter.status`                                   | `planned`, `in_progress` as `in-progress`, `finished`, `cancelled`                         |
+| `Encounter.class`                                    | `inpatient` IMP, `outpatient` AMB, `emergency` EMER (v3 ActCode)                           |
+| `Encounter.period`                                   | `admitted_at` to `discharged_at`                                                           |
+| `Encounter.serviceType`, `participant`, `reasonCode` | `department` as text, `physician` as a display, `diagnosis_code` in ICD-10                 |
+| `Observation.category`, `code`                       | `laboratory`; LOINC `test_code` with `lab_tests.name` as its display                       |
+| `Observation.subject`, `encounter`                   | `Patient/{patient_id}`, `Encounter/{encounter_id}`                                         |
+| `Observation.value[x]`                               | `valueQuantity` from `value_numeric` and `unit` (UCUM), or `valueString` from `value_text` |
+| `Observation.interpretation`, `referenceRange`       | `flag` in v3 ObservationInterpretation; `ref_low`, `ref_high`                              |
+| `Observation.status`, `effectiveDateTime`, `issued`  | `status`; `collected_at`; `reported_at`                                                    |
+
+The store declares `versions: 'none'` (the tables keep no versions), the interactions `read` and
+`search`, `chains` to its own three types, and `sort`. It gives `meta.lastUpdated`, without a
+`versionId`.
+
+## Searches
+
+Each type names the parameters it answers in `searchParams`; the server refuses the others.
+
+| Type        | Parameters                                                                                                                                    |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Patient     | `_id`, `_lastUpdated`, `identifier`, `name`, `family`, `given`, `gender`, `birthdate`, `active`, `phone`, `email`, `address-city`, `deceased` |
+| Encounter   | `_id`, `_lastUpdated`, `identifier`, `patient`, `subject`, `status`, `class`, `date`, `reason-code`                                           |
+| Observation | `_id`, `_lastUpdated`, `patient`, `subject`, `encounter`, `code`, `category`, `status`, `date`, `value-quantity`, `code-value-quantity`       |
+
+- **A criterion becomes a sqb condition**, by the kind of column behind the parameter, not by
+  the parameter: a token over a code column with a code map (`gender`, `status`), a token over
+  identifier columns chosen by system, a string over several columns (`name` over three, with
+  `ILIKE 'x%'`, `:exact`, `:contains`; FHIR also ignores accents, which needs PostgreSQL's
+  `unaccent` on both sides), a date over one column or over a period of two (`date`
+  of an Encounter: the period overlaps the value's range, with the prefixes), a quantity over a
+  number and a unit column, a reference over a foreign key. Values of one criterion are `OR`,
+  criteria `AND`.
+- **`:missing`** is `IS NULL` / `IS NOT NULL`; **`:not`** is `NOT (...)` with the rows whose
+  column is null kept, as FHIR asks. `:text` and `:above`/`:below` are refused (400) by the store.
+- **Chains and `_has`** become `EXISTS` subqueries: `Observation?subject:Patient.name=ali` is
+  `EXISTS (SELECT 1 FROM patients p WHERE p.id = lab_results.patient_id AND <name>)`,
+  `Patient?_has:Observation:patient:code=2339-0` the other way round. Nesting follows the chain.
+- **`code-value-quantity`** is the `AND` of its parts on one row: a result is one row.
+- **`_sort`**: Patient by `family`, `birthdate`; Encounter by `date`; Observation by `date`,
+  each with `NULLS LAST`, then by `id` so that pages are stable.
+- **Paging and total:** `LIMIT` and `OFFSET`, and a `COUNT(*)` of the same condition.
+- **`_include`, `_revinclude`, `_summary`, `_elements`** need nothing of the store: the server
+  does them with `read` and `search`.
+
+## Where it is used
+
+```ts
+const emr = new EmrStore({ client: new SqbClient({ dialect: 'postgres', ... }) });
+new FhirServer({ fhir, store: emr, resources: ['Patient', 'Encounter', 'Observation'] });
+// or next to a FHIR store for the other types
+new FhirServer({
+  fhir,
+  store: new RoutingStore({
+    store: new MemoryStore(),
+    routes: { Patient: emr, Encounter: emr, Observation: emr },
+  }),
+});
+```
+
+## Tests
+
+- **Against the memory store.** The seed rows are mapped to resources and put in a
+  `MemoryStore`. A list of search URLs (each parameter, modifier, prefix, chain, `_has`, the
+  composite, sorting and paging) runs on both servers, and the ids and their order must be the
+  same. The memory store matches by FHIRPath, so the SQL is checked against the meaning of each
+  parameter rather than against SQL written twice.
+- **Reads:** each mapped resource is valid against R4, and a read gives what the mapping gives.
+- **Refusals:** a parameter the store does not name, `:text`, a write (405).
+- **PostgreSQL:** the tests make a schema of their own (`facade_<random>`), seed it and drop it.
+  They read the connection from `FHIR_PG_URL` and skip without it, as the tests that need the
+  HL7 packages do. (Changed while building: no default address, so that no test writes to a
+  database that happens to answer on the default port.) CI's `test` job gets a `postgres`
+  service, as sqb's own CI has.
+- **Control runs** as for the other steps: a prefix ignored, `:not` dropping nulls, a chain
+  without its condition, the composite on two rows; tests must fail each time.
+
+## What to look for
+
+The point of the example is what a helper would take over. Notes kept while building it go in a
+"Built" section here: which translators were the same for every table (a token over a code
+column, a date over a period), what the mapping needed that a declarative table description
+cannot say, and what sqb lacked, if anything (reported to its maintainers, not worked around).
+
+## Built (2026-11-23)
+
+`examples/facade`: `schema.sql`, `seed.ts` (20 patients, 40 encounters, 5 tests, 200 results,
+the same on every run), `mapping.ts` (rows to resources), `sql-search.ts` (the translators),
+`emr-store.ts` (`EmrStore`), `db.ts` (a schema of its own, made and seeded), and
+`test/facade.spec.ts`. sqb (`@sqb/builder`, `@sqb/connect`, `@sqb/postgres`; 6.3.8 now) as dev
+dependencies of the repository.
+
+- **Every row maps to a valid R4 resource**, and 140 searches give the same resources, in the
+  same order, on the facade and on the same resources matched by FHIRPath: each parameter,
+  modifier and prefix named above, chains of one and two links, `_has` nested, the composite,
+  `_sort`, paging, `_include` and `_revinclude`.
+- **Waited for sqb 6.3.7** (below): Encounter `date` and `_sort=date` (a period of two columns,
+  either open; its sort key is its start ascending and its end descending, the other end where
+  one is missing), and `:missing` on a parameter over two columns (`identifier`, `name`, `given`)
+  and on `code-value-quantity` (an item with every part). Nothing worked around the bug.
+- **Refused by the store (400):** `:text`, the prefix `ap` of a date (it depends on the time of
+  the search), a write (405 from the server: the store declares read and search only). _The
+  example writes now, through `@fhirjs/sql`: "Writes" in [`sql-facade.md`](sql-facade.md)._
+
+### What the helper would take over
+
+- **The translators were the same for every table**: a token over code columns (with a code map,
+  a system, or a constant), a string over text columns, a date over an instant, a date or a
+  period, a quantity over a number and a unit, a reference over a foreign key. `sql-search.ts`
+  holds them; the tables name them per parameter in a few lines each (`emr-store.ts`). A table
+  description could name them as data, with two exceptions met here: a value computed in SQL
+  (`deceased`, from whether `deceased_at` is null) and a column in another table (the test's
+  name, by a subquery). An expression where a column goes covers both.
+- **Chains and `_has` need only the foreign keys** (`refs`): an `EXISTS` on the target's table,
+  its criteria translated by the same code, nested to any depth.
+- **The meaning of a parameter had to be followed closely**, and the comparison tests found what
+  reading the specification did not: a ContactPoint is found with or without its system
+  (`phone=phone|x`), a primitive code is never found with a system
+  (`gender=http://hl7.org/fhir/administrative-gender|male` finds nothing, as on the memory
+  store), `:not` keeps the rows without a value (so each comparison checks its column is there
+  first), a date's `gt` compares the end of the row's range and `lt` its start, and the order of
+  `_sort` is that of the normalized strings (`collate "C"` on `lower(unaccent())`).
+- **Values go as parameters**, never in the SQL text: sqb writes a `Date` literal without its
+  milliseconds. A query's parameters are copied for each execution.
+- **The store does not know the server's base URL**: an absolute reference
+  (`subject=http://host/fhir/Patient/1`) cannot be told local, so the facade finds nothing for
+  it, where the memory store, given the base, finds the patient. A helper would want the base in
+  `SearchQuery` or in the request context.
+
+### Found in sqb (6.3.6), fixed in 6.3.7
+
+Two `IS NULL` / `IS NOT NULL` tests in one `AND` or `OR` left a parameter the SQL does not use:
+
+```ts
+Select('x')
+  .from('t')
+  .where(Or(IsNot('a', null), IsNot('c', null)), Gt('b', Param('p0')))
+  .generate({ dialect: 'postgres', params: { p0: 1 }, strictParams: true });
+// sql: select x from t where (a is not null or c is not null) and b > $2
+// params: [null, 1]
+```
+
+PostgreSQL refuses it ("could not determine data type of parameter $1"). The postgres dialect
+drops the parameter of a null comparison it writes as `IS [NOT] NULL`, and the second one was
+left behind; two `Param()`s bound to null did the same, with or without `strictParams`. Reported
+to sqb's maintainers and fixed in `@sqb/postgres-dialect` 6.3.7.
+
+Since then the example is a description for `@fhirjs/sql` ([`sql-facade.md`](sql-facade.md)):
+`sql-search.ts` moved into the package, and `emr-store.ts` names the kinds of its columns.
+
+## Not in this step
+
+Writes (create, update, delete), history and versions, transactions, a terminology server for
+the codes, and other databases than PostgreSQL.

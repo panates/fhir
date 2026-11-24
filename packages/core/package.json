@@ -1,0 +1,57 @@
+{
+  "name": "@fhirjs/core",
+  "description": "FHIR object model, codecs, profiles and package loading for NodeJS",
+  "keywords": [
+    "fhir",
+    "hl7",
+    "hl7-fhir",
+    "healthcare",
+    "health",
+    "medical",
+    "interoperability",
+    "typescript",
+    "fhir-model",
+    "decorators",
+    "codec",
+    "validation",
+    "profiles",
+    "implementation-guide",
+    "structure-definition",
+    "extensions",
+    "fhir-r4",
+    "fhir-r4b",
+    "fhir-r5"
+  ],
+  "version": "0.0.0",
+  "private": true,
+  "license": "BSD-3-Clause",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@fhirjs/fhirpath": "workspace:^",
+    "tslib": "^2.9.1",
+    "valgen": "^7.0.13"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/panates/fhirjs.git",
+    "directory": "packages/core"
+  },
+  "publishConfig": {
+    "access": "public",
+    "directory": "build",
+    "linkDirectory": true
+  },
+  "devDependencies": {
+    "expect": "^30.5.2"
+  }
+}

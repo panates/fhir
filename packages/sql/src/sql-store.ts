@@ -1,0 +1,847 @@
+/**
+ * A store over an existing database, described table by table: reads,
+ * searches and writes translated to SQL with sqb.
+ */
+import {
+  FhirServerError,
+  type FhirStore,
+  type FhirStoreInteraction,
+  type SearchCriterion,
+  type SearchQuery,
+  type StoreCapabilities,
+  type StoredResource,
+  type StoredVersion,
+  type StorePage,
+} from '@fhirjs/server';
+import {
+  And,
+  Delete,
+  Eq,
+  Exists,
+  InnerJoin,
+  Insert,
+  Not,
+  Or,
+  type Query,
+  Raw,
+  Select,
+  Update,
+} from '@sqb/builder';
+import type { SqbClient, SqbConnection } from '@sqb/connect';
+import { type ChildParam, type SqlChild } from './children.js';
+import {
+  code,
+  type Column,
+  columnSql,
+  type Cond,
+  type CustomParam,
+  date,
+  FALSE,
+  instant,
+  type ParamSql,
+  type SqlContext,
+  SqlParams,
+  token,
+} from './columns.js';
+import { postgres, type SqlDialect } from './dialect.js';
+import { lostElements, notKept, type SqlRunner } from './writes.js';
+
+/** A resource type kept in a table */
+export interface SqlTable {
+  /** The table, with its schema if need be */
+  table: string;
+  /** The column of the resource's id; `id` by default */
+  id?: Column;
+  /**
+   * The column of `meta.lastUpdated`, for `_lastUpdated`. When the table is
+   * written and this is a column name, the store sets it on every write and
+   * the resource's versionId is its milliseconds: If-Match is checked.
+   */
+  lastUpdated?: Column;
+  /** The select list of a row of the alias: the columns `resource()` reads */
+  select(alias: string): string;
+  /**
+   * A row to its resource; `children` has the rows of each child, in their
+   * order, an empty list for a parent without rows
+   */
+  resource(
+    row: Record<string, any>,
+    children: Record<string, Record<string, any>[]>,
+  ): Record<string, any>;
+  /**
+   * Rows of the resource in tables of their own, by a name of the table's
+   * choosing: `childTable()`, or code of the application. A parameter over
+   * their rows is `child(name, param)`.
+   */
+  children?: Record<string, SqlChild>;
+  /** The search parameters it answers, by code; `_id` and `_lastUpdated` come from `id` and `lastUpdated` */
+  params?: Record<string, ParamSql | CustomParam>;
+  /**
+   * The parameters it can be sorted by: a code, its key taken from the
+   * parameter's kind, or a code and a key of its own
+   */
+  sort?: readonly (string | SqlSortKey)[];
+  /**
+   * A resource to the table's columns, for create and update; without it,
+   * the type is read-only. It gives every column it maps, null where the
+   * resource has no value (an update replaces the resource), and refuses
+   * (FhirServerError 422) an element it cannot keep: `onlyElements()`. The
+   * store sets the id and `lastUpdated` columns, then reads the row back and
+   * refuses the write when an element did not come back. `db` runs SQL in
+   * the write's transaction, for a code kept in a table of its own. The
+   * children write their rows after the row.
+   */
+  row?(
+    resource: Record<string, any>,
+    db: SqlRunner,
+  ): Record<string, unknown> | Promise<Record<string, unknown>>;
+}
+
+/** A sort key of its own: SQL of the row of the alias */
+export interface SqlSortKey {
+  param: string;
+  key(alias: string, descending: boolean): string;
+}
+
+export interface SqlStoreOptions {
+  /** An sqb client of the database */
+  client: SqbClient;
+  /** The tables, by resource type */
+  types: Record<string, SqlTable>;
+  /** The SQL of the database; PostgreSQL by default */
+  dialect?: SqlDialect;
+}
+
+interface Resolved {
+  def: SqlTable;
+  params: Record<string, ParamSql | CustomParam>;
+  sort: Record<string, (ctx: SqlContext, descending: boolean) => string>;
+  /** The id column */
+  id: Column;
+  /** Written with a version from `lastUpdated` */
+  versioned: boolean;
+}
+
+/** A parameter over a child's rows, as resolved: the rows, and the parameter of a row */
+interface ChildRows {
+  /** The child, for parts on one row */
+  name: string;
+  /** The parameter on a row of the child */
+  param: ParamSql;
+  /** The rows' table and alias, joined to the parent row of `ctx`, without `where` */
+  rows(ctx: SqlContext): Rows;
+  /** The rows the parameter is limited to */
+  where?: (alias: string) => string;
+}
+
+/**
+ * A child's rows joined to a parent row: the table of the first child, the
+ * tables of the children of its rows joined to it, and the condition of the
+ * first on the parent
+ */
+interface Rows {
+  /** The last child's row */
+  inner: SqlContext;
+  from: string;
+  joins: { table: string; on: string }[];
+  on: string;
+}
+
+/** SELECT 1 over the rows, with `where` */
+const selectRows = (r: Rows, ...where: Cond[]) => {
+  let q = Select(Raw('1')).from(r.from);
+  for (const j of r.joins) q = q.join(InnerJoin(j.table).on(Raw(j.on)));
+  return q.where(...where);
+};
+
+/** The rows' FROM as SQL text */
+const fromSql = (r: Rows) =>
+  [r.from, ...r.joins.map(j => `join ${j.table} on ${j.on}`)].join(' ');
+
+type ChildParamSql = ParamSql & { [CHILD]: ChildRows };
+const CHILD = Symbol('child');
+const childOf = (p: ParamSql | CustomParam | undefined) =>
+  typeof p === 'object' ? (p as Partial<ChildParamSql>)[CHILD] : undefined;
+
+/** Where queries run: the pool, or the connection of a transaction */
+type Db = SqbClient | SqbConnection;
+
+/** The column the version is read into, beside the table's own */
+const VERSION = 'fhir_version__';
+/** The column the id is read into as text, for the rows of the children */
+const ID = 'fhir_id__';
+
+/**
+ * A store over the tables of an existing database. It reads and searches,
+ * and writes the tables that map a resource back to a row; the rows are
+ * mapped to resources by the code of each table. Every write is a database
+ * transaction, and `transaction()` runs a transaction Bundle in one.
+ */
+export class SqlStore implements FhirStore {
+  private readonly _client: SqbClient;
+  private readonly _dialect: SqlDialect;
+  private readonly _types = new Map<string, Resolved>();
+  /** The connection of the transaction this view runs in */
+  private _connection?: SqbConnection;
+  /** The children prepared, once */
+  private _prepared?: Promise<void>;
+
+  constructor(options: SqlStoreOptions) {
+    this._client = options.client;
+    this._dialect = options.dialect ?? postgres;
+    for (const [type, def] of Object.entries(options.types)) {
+      const id = def.id ?? 'id';
+      const params: Record<string, ParamSql | CustomParam> = {
+        _id: token(code(a => this._dialect.text(columnSql(id, a)))),
+        ...(def.lastUpdated && {
+          _lastUpdated: date(instant(def.lastUpdated)),
+        }),
+      };
+      for (const [name, p] of Object.entries(def.params ?? {}))
+        params[name] =
+          typeof p === 'object' && 'child' in p
+            ? this._childParam(type, def, id, p as ChildParam)
+            : p;
+      const sort: Resolved['sort'] = {};
+      for (const s of def.sort ?? []) {
+        if (typeof s !== 'string') {
+          sort[s.param] = (ctx, desc) => s.key(ctx.alias, desc);
+          continue;
+        }
+        const p = params[s];
+        const key = typeof p === 'object' ? p.sort : undefined;
+        if (!key)
+          throw new TypeError(
+            `${type}: ${s} has no sort key of its kind; give one with { param, key }`,
+          );
+        sort[s] = key;
+      }
+      if (def.row && typeof id !== 'string')
+        throw new TypeError(
+          `${type}: a table that is written needs its id as a column name`,
+        );
+      const versioned = !!def.row && typeof def.lastUpdated === 'string';
+      this._types.set(type, { def, params, sort, id, versioned });
+    }
+  }
+
+  capabilities(type: string): StoreCapabilities | undefined {
+    const t = this._types.get(type);
+    if (!t) return;
+    const writes: FhirStoreInteraction[] = t.def.row
+      ? ['create', 'update', 'delete']
+      : [];
+    return {
+      interactions: ['read', 'search', ...writes],
+      versions: t.versioned ? 'current' : 'none',
+      searchParams: Object.keys(t.params),
+      sort: Object.keys(t.sort),
+      chains: target => this._types.has(target),
+    };
+  }
+
+  async read(type: string, id: string): Promise<StoredResource | undefined> {
+    await this._prepare();
+    return this._read(this._db, type, id);
+  }
+
+  private async _read(
+    db: Db,
+    type: string,
+    id: string,
+  ): Promise<StoredResource | undefined> {
+    const t = this._types.get(type)!;
+    const p = new SqlParams();
+    const query = Select(Raw(this._select(t, 't')))
+      .from(`${t.def.table} t`)
+      .where(this._idIs(t, 't', p.add(id)));
+    const rows = await this._rows(db, query, p.values);
+    return (await this._stored(db, type, t, rows))[0];
+  }
+
+  async search(
+    type: string,
+    query: SearchQuery,
+  ): Promise<StorePage<StoredResource>> {
+    await this._prepare();
+    const t = this._types.get(type)!;
+    const p = new SqlParams();
+    const aliases = { n: 0 };
+    const ctx = this._ctx('t', p);
+    const where = query.criteria.map(c => this._criterion(c, t, ctx, aliases));
+    const order = [
+      ...query.sort.map(s => {
+        const key = t.sort[s.param.code];
+        if (!key) throw new FhirServerError(400, `No sort by ${s.param.code}`);
+        return `${key(ctx, s.descending)} ${s.descending ? 'desc' : 'asc'} nulls last`;
+      }),
+      columnSql(t.id, 't'),
+    ].join(', ');
+    const select = Select(Raw(this._select(t, 't')))
+      .from(`${t.def.table} t`)
+      .where(...where)
+      .orderBy(Raw(order) as any)
+      .limit(query.count)
+      .offset(query.offset);
+    const count = Select(Raw('cast(count(*) as int) as n'))
+      .from(`${t.def.table} t`)
+      .where(...where);
+    const rows = await this._rows(this._db, select, p.values);
+    const [{ n }] = await this._rows(this._db, count, p.values);
+    return {
+      items: await this._stored(this._db, type, t, rows),
+      total: n,
+    };
+  }
+
+  async create(
+    type: string,
+    resource: Record<string, any>,
+  ): Promise<StoredVersion> {
+    const t = this._types.get(type)!;
+    return this._atomic(type, 'create', async db => {
+      const columns = await this._columns(db, t, resource, Date.now());
+      const p = new SqlParams();
+      const insert = Insert(t.def.table, valuesOf(columns, p)).returning(
+        t.id as string,
+      );
+      const [row] = await this._rows(db, insert, p.values);
+      const id = String(Object.values(row)[0]);
+      await this._writeChildren(db, t, id, resource);
+      return this._readBack(db, type, id, resource, 'POST');
+    });
+  }
+
+  async update(
+    type: string,
+    id: string,
+    resource: Record<string, any>,
+    ifMatch?: string,
+  ): Promise<StoredVersion | undefined> {
+    const t = this._types.get(type)!;
+    return this._atomic(type, 'update', async db => {
+      const current = await this._lock(db, t, type, id, ifMatch);
+      if (current === undefined) return;
+      // a version after the current one, even within its millisecond
+      const columns = await this._columns(
+        db,
+        t,
+        resource,
+        Math.max(Date.now(), Number(current) + 1),
+      );
+      const p = new SqlParams();
+      await this._rows(
+        db,
+        Update(t.def.table, valuesOf(columns, p)).where(
+          this._idIs(t, undefined, p.add(id)),
+        ),
+        p.values,
+      );
+      await this._writeChildren(db, t, id, resource);
+      return this._readBack(db, type, id, resource, 'PUT');
+    });
+  }
+
+  async delete(
+    type: string,
+    id: string,
+    ifMatch?: string,
+  ): Promise<StoredVersion | undefined> {
+    const t = this._types.get(type)!;
+    return this._atomic(type, 'delete', async db => {
+      if ((await this._lock(db, t, type, id, ifMatch)) === undefined) return;
+      for (const c of Object.values(t.def.children ?? {}))
+        await c.remove?.(id, this._runner(db));
+      const p = new SqlParams();
+      await this._rows(
+        db,
+        Delete(t.def.table).where(this._idIs(t, undefined, p.add(id))),
+        p.values,
+      );
+      return { type, id, method: 'DELETE' as const };
+    });
+  }
+
+  async transaction<T>(work: (tx: FhirStore) => Promise<T>): Promise<T> {
+    return this._client.acquire(async (connection: SqbConnection) => {
+      await connection.startTransaction();
+      const view: SqlStore = Object.create(this);
+      view._connection = connection;
+      (view as any).transaction = undefined;
+      try {
+        const result = await work(view);
+        await connection.commit();
+        return result;
+      } catch (e) {
+        await connection.rollback();
+        throw e;
+      }
+    });
+  }
+
+  private get _db(): Db {
+    return this._connection ?? this._client;
+  }
+
+  /**
+   * Runs a write in a transaction: the one of this view, or one of its own;
+   * a refusal of the database becomes the answer to the client
+   */
+  private async _atomic<T>(
+    type: string,
+    interaction: 'create' | 'update' | 'delete',
+    write: (db: Db) => Promise<T>,
+  ): Promise<T> {
+    await this._prepare();
+    const run = async (db: Db) => {
+      try {
+        return await write(db);
+      } catch (e) {
+        throw this._refused(e, type, interaction);
+      }
+    };
+    if (this._connection) return run(this._connection);
+    return this._client.acquire(async (connection: SqbConnection) => {
+      await connection.startTransaction();
+      try {
+        const result = await run(connection);
+        await connection.commit();
+        return result;
+      } catch (e) {
+        await connection.rollback();
+        throw e;
+      }
+    });
+  }
+
+  private _refused(
+    e: unknown,
+    type: string,
+    interaction: 'create' | 'update' | 'delete',
+  ): unknown {
+    switch (this._dialect.refusal(e)) {
+      case 'unique':
+        return new FhirServerError(
+          409,
+          `A ${type} with the same unique value exists`,
+          'duplicate',
+        );
+      case 'reference':
+        return interaction === 'delete'
+          ? new FhirServerError(
+              409,
+              `The ${type} is referred to by other rows of the database`,
+              'conflict',
+            )
+          : new FhirServerError(
+              422,
+              `The ${type} refers to a row the database does not have`,
+              'invalid',
+            );
+      case 'invalid':
+        return new FhirServerError(
+          422,
+          `The database refused a value of the ${type}`,
+          'invalid',
+        );
+      default:
+        return e;
+    }
+  }
+
+  /**
+   * Locks the row to write and checks If-Match: its version, '' for a table
+   * without versions, undefined when there is no row
+   */
+  private async _lock(
+    db: Db,
+    t: Resolved,
+    type: string,
+    id: string,
+    ifMatch: string | undefined,
+  ): Promise<string | undefined> {
+    if (!t.def.row)
+      throw new FhirServerError(405, `${type} is not written`, 'not-supported');
+    const version = t.versioned
+      ? this._dialect.epochMillis(columnSql(t.def.lastUpdated!, 't'))
+      : `''`;
+    const [row] = await this._rows(
+      db,
+      `select ${version} as v from ${t.def.table} t
+        where ${this._dialect.text(columnSql(t.id, 't'))} = :id for update`,
+      { id },
+    );
+    if (!row) return;
+    if (ifMatch !== undefined && t.versioned && row.v !== ifMatch)
+      throw new FhirServerError(
+        412,
+        `If-Match: ${type}/${id} is at version ${row.v}, not ${ifMatch}`,
+        'conflict',
+      );
+    return row.v as string;
+  }
+
+  /** The resource's columns from the table's row(), with lastUpdated */
+  private async _columns(
+    db: Db,
+    t: Resolved,
+    resource: Record<string, any>,
+    now: number,
+  ): Promise<Record<string, unknown>> {
+    const columns = { ...(await t.def.row!(resource, this._runner(db))) };
+    if (t.versioned) columns[t.def.lastUpdated as string] = new Date(now);
+    return columns;
+  }
+
+  private _runner(db: Db): SqlRunner {
+    return {
+      rows: async (sql, params) => this._rows(db, sql, params ?? {}),
+      repository: entity => db.getRepository(entity),
+    };
+  }
+
+  /** Prepares every child once; a failure is tried again on the next call */
+  private _prepare(): Promise<void> {
+    this._prepared ??= Promise.all(
+      [...this._types.values()].flatMap(t =>
+        Object.values(t.def.children ?? {}).map(c => c.prepare?.()),
+      ),
+    ).then(
+      () => undefined,
+      e => {
+        this._prepared = undefined;
+        throw e;
+      },
+    );
+    return this._prepared;
+  }
+
+  private async _writeChildren(
+    db: Db,
+    t: Resolved,
+    id: string,
+    resource: Record<string, any>,
+  ): Promise<void> {
+    for (const c of Object.values(t.def.children ?? {}))
+      await c.write?.(id, resource, this._runner(db));
+  }
+
+  /** The row written, read back: refused when an element of the resource is not in it */
+  private async _readBack(
+    db: Db,
+    type: string,
+    id: string,
+    written: Record<string, any>,
+    method: 'POST' | 'PUT',
+  ): Promise<StoredVersion> {
+    const s = (await this._read(db, type, id))!;
+    const lost = lostElements(written, s.resource!);
+    if (lost.length) throw notKept(type, lost);
+    return { ...s, method };
+  }
+
+  /** The select list of the table, with the version when it has one */
+  private _select(t: Resolved, alias: string): string {
+    let list = t.def.select(alias);
+    if (t.def.children)
+      list += `, ${this._dialect.text(columnSql(t.id, alias))} as ${ID}`;
+    return t.versioned
+      ? `${list}, ${this._dialect.epochMillis(
+          columnSql(t.def.lastUpdated!, alias),
+        )} as ${VERSION}`
+      : list;
+  }
+
+  /** The row's id is the value: compared as text */
+  private _idIs(t: Resolved, alias: string | undefined, value: unknown): Cond {
+    const id = t.id;
+    const column =
+      alias === undefined && typeof id === 'string'
+        ? id
+        : columnSql(id, alias!);
+    return Eq(Raw(this._dialect.text(column)), value) as unknown as Cond;
+  }
+
+  /** Rows to resources, with the rows of their children: one query a child */
+  private async _stored(
+    db: Db,
+    type: string,
+    t: Resolved,
+    rows: Record<string, any>[],
+  ): Promise<StoredResource[]> {
+    const children = Object.entries(t.def.children ?? {});
+    const ids = rows.map(r => r[ID] as string);
+    const read = await Promise.all(
+      children.map(([, c]) => c.read(ids, this._runner(db))),
+    );
+    return rows.map(row => {
+      const { [VERSION]: versionId, [ID]: id, ...rest } = row;
+      const resource = t.def.resource(
+        rest,
+        Object.fromEntries(
+          children.map(([name], i) => [name, read[i].get(id) ?? []]),
+        ),
+      );
+      if (versionId === undefined) return stored(type, resource);
+      resource.meta = { ...resource.meta, versionId };
+      return { ...stored(type, resource), versionId };
+    });
+  }
+
+  /** A parameter over the rows of a child: EXISTS a row that matches */
+  private _childParam(
+    type: string,
+    def: SqlTable,
+    id: Column,
+    p: ChildParam,
+  ): ParamSql {
+    const { name, param, where } = p.child;
+    // the path: a child of the table, and children of its rows
+    const path: { child: SqlChild; n: number }[] = [];
+    let children = def.children;
+    for (const step of name.split('.')) {
+      const c = children?.[step];
+      if (!c?.join || (path.length && !path.at(-1)!.child.rowId))
+        throw new TypeError(
+          `${type}: child(${name}) names no child of the table that can be joined`,
+        );
+      path.push({ child: c, n: Object.keys(children!).indexOf(step) });
+      children = c.children;
+    }
+    // the rows of the last child, joined through those of the children before
+    const joined = (ctx: SqlContext): Rows => {
+      let alias = ctx.alias;
+      let parentId = columnSql(id, ctx.alias);
+      let from = '';
+      let on = '';
+      const joins: Rows['joins'] = [];
+      for (const [i, { child, n }] of path.entries()) {
+        const next = `${alias}_k${n}`;
+        const j = child.join!(parentId, next);
+        if (i === 0) {
+          from = `${j.table} ${next}`;
+          on = j.on;
+        } else joins.push({ table: `${j.table} ${next}`, on: j.on });
+        alias = next;
+        parentId = child.rowId?.(next) ?? '';
+      }
+      return { inner: { ...ctx, alias }, from, joins, on };
+    };
+    const rows = (ctx: SqlContext) => {
+      const r = joined(ctx);
+      return where ? { ...r, on: `${r.on} and ${where(r.inner.alias)}` } : r;
+    };
+    const exists = (ctx: SqlContext, cond: (inner: SqlContext) => Cond) => {
+      const r = rows(ctx);
+      return Exists(selectRows(r, Raw(r.on), cond(r.inner))) as unknown as Cond;
+    };
+    const resolved: ChildParamSql = {
+      [CHILD]: { name, param, rows: joined, where },
+      present: ctx => exists(ctx, inner => param.present(inner)),
+      // :not is the store's: NOT EXISTS a row that matches
+      value: (ctx, v, modifier) =>
+        exists(ctx, inner => param.value(inner, v, modifier)),
+      sort: param.sort
+        ? (ctx, descending) => {
+            const r = rows(ctx);
+            return `(select ${descending ? 'max' : 'min'}(${param.sort!(
+              r.inner,
+              descending,
+            )}) from ${fromSql(r)} where ${r.on})`;
+          }
+        : undefined,
+    };
+    return resolved;
+  }
+
+  /**
+   * Conditions of parts that must hold on one row: the parent's parts on
+   * its row, a child's parts on one row of the child (one EXISTS a child,
+   * each part's `where` on that row)
+   */
+  private _oneRow(
+    ctx: SqlContext,
+    parts: ParamSql[],
+    cond: (part: ParamSql, i: number, ctx: SqlContext) => Cond,
+  ): Cond {
+    const conds: Cond[] = [];
+    const children = new Map<string, { rows: ChildRows; at: number[] }>();
+    parts.forEach((part, i) => {
+      const c = childOf(part);
+      if (!c) return conds.push(cond(part, i, ctx));
+      const g = children.get(c.name);
+      if (g) g.at.push(i);
+      else children.set(c.name, { rows: c, at: [i] });
+    });
+    for (const { rows, at } of children.values()) {
+      const r = rows.rows(ctx);
+      const wheres = [
+        ...new Set(
+          at
+            .map(i => childOf(parts[i])!.where?.(r.inner.alias))
+            .filter(Boolean),
+        ),
+      ];
+      conds.push(
+        Exists(
+          selectRows(
+            r,
+            Raw([r.on, ...wheres].join(' and ')),
+            ...at.map(i => cond(childOf(parts[i])!.param, i, r.inner)),
+          ),
+        ) as unknown as Cond,
+      );
+    }
+    return (conds.length === 1 ? conds[0] : And(...conds)) as unknown as Cond;
+  }
+
+  /**
+   * A reference parameter, on the row or on a child's rows: its foreign
+   * key and target, and the rows it is on
+   */
+  private _referenceOf(
+    t: Resolved,
+    name: string,
+  ): { fk: Column; target: string; child?: ChildRows } | undefined {
+    const p = t.params[name];
+    if (typeof p !== 'object') return;
+    if (p.reference) return p.reference;
+    const c = childOf(p);
+    return c?.param.reference && { ...c.param.reference, child: c };
+  }
+
+  /** EXISTS a row of `child` of the row of `ctx` on which `cond` holds; `cond` itself without a child */
+  private _onRows(
+    ctx: SqlContext,
+    child: ChildRows | undefined,
+    cond: (rowCtx: SqlContext) => Cond,
+  ): Cond {
+    if (!child) return cond(ctx);
+    const r = child.rows(ctx);
+    const on = child.where ? `${r.on} and ${child.where(r.inner.alias)}` : r.on;
+    return Exists(selectRows(r, Raw(on), cond(r.inner))) as unknown as Cond;
+  }
+
+  private _ctx(alias: string, params: SqlParams): SqlContext {
+    return { alias, params, dialect: this._dialect };
+  }
+
+  /** One criterion as a condition on the row of `ctx.alias` */
+  private _criterion(
+    c: SearchCriterion,
+    t: Resolved,
+    ctx: SqlContext,
+    aliases: { n: number },
+  ): Cond {
+    if (c.chain) {
+      // the reference on the row, or on a row of a child
+      const ref = this._referenceOf(t, c.param.code);
+      if (!ref || ref.target !== c.chain.type) return FALSE;
+      const target = this._types.get(ref.target)!;
+      const chain = c.chain;
+      return this._onRows(ctx, ref.child, row => {
+        const inner = this._ctx(`c${++aliases.n}`, ctx.params);
+        return Exists(
+          Select(Raw('1'))
+            .from(`${target.def.table} ${inner.alias}`)
+            .where(
+              Eq(
+                Raw(columnSql(target.id, inner.alias)),
+                Raw(columnSql(ref.fk, row.alias)),
+              ),
+              ...chain.criteria.map(k =>
+                this._criterion(k, target, inner, aliases),
+              ),
+            ),
+        ) as unknown as Cond;
+      });
+    }
+    if (c.has) {
+      const from = this._types.get(c.has.type);
+      const ref = from && this._referenceOf(from, c.param.code);
+      if (!ref || this._types.get(ref.target) !== t) return FALSE;
+      const inner = this._ctx(`h${++aliases.n}`, ctx.params);
+      return Exists(
+        Select(Raw('1'))
+          .from(`${from.def.table} ${inner.alias}`)
+          .where(
+            // a row of the other type, or of its child, refers to this one
+            this._onRows(
+              inner,
+              ref.child,
+              row =>
+                Eq(
+                  Raw(columnSql(ref.fk, row.alias)),
+                  Raw(columnSql(t.id, ctx.alias)),
+                ) as unknown as Cond,
+            ),
+            ...c.has.criteria.map(k =>
+              this._criterion(k, from, inner, aliases),
+            ),
+          ),
+      ) as unknown as Cond;
+    }
+    const param = t.params[c.param.code];
+    if (!param) throw new FhirServerError(400, `No search by ${c.param.code}`);
+    if (typeof param === 'function') return param(ctx, c);
+    // a composite on one row: its parts are the row's parameters of its components
+    const parts = c.components?.map(k => {
+      const part = t.params[k.param.code];
+      if (typeof part !== 'object')
+        throw new FhirServerError(
+          400,
+          `${c.param.code}: its part ${k.param.code} is not searched by kind`,
+          'not-supported',
+        );
+      return part;
+    });
+    if (c.missing !== undefined) {
+      const present = parts
+        ? this._oneRow(ctx, parts, (s, _i, row) => s.present(row))
+        : param.present(ctx);
+      return (c.missing ? Not(present) : present) as unknown as Cond;
+    }
+    if (parts)
+      return Or(
+        ...c.values.map(v =>
+          this._oneRow(ctx, parts, (s, i, row) =>
+            s.value(row, v.components![i], undefined),
+          ),
+        ),
+      ) as unknown as Cond;
+    const any = Or(...c.values.map(v => param.value(ctx, v, c.modifier)));
+    return (c.modifier === 'not' ? Not(any) : any) as unknown as Cond;
+  }
+
+  private async _rows(
+    db: Db,
+    query: Query | string,
+    params: Record<string, unknown>,
+  ): Promise<Record<string, any>[]> {
+    const result = await db.execute(query, {
+      params: { ...params },
+      objectRows: true,
+    });
+    return (result.rows ?? []) as Record<string, any>[];
+  }
+}
+
+/** Columns to values as parameters: sqb would write a Date into the SQL text */
+function valuesOf(
+  columns: Record<string, unknown>,
+  p: SqlParams,
+): Record<string, unknown> {
+  const values: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(columns))
+    values[k] = p.add(v === undefined ? null : v);
+  return values;
+}
+
+function stored(type: string, resource: Record<string, any>): StoredResource {
+  return {
+    type,
+    id: resource.id,
+    resource,
+    lastUpdated: resource.meta?.lastUpdated,
+  };
+}

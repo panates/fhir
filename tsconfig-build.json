@@ -1,0 +1,10 @@
+{
+  "extends": "@panates/tsconfig/build.json",
+  "compilerOptions": {
+    // A package's tsconfig.json maps its siblings to their sources, for the
+    // tests and rman check; a build takes their declarations instead
+    "paths": {
+      "@fhirjs/*": ["./packages/*/build/index.d.ts"]
+    }
+  }
+}

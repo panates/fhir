@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig-base.json",
+  "include": ["src"],
+  "exclude": ["build"],
+  "references": [{ "path": "../core" }],
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "./build",
+    "noEmit": false,
+    /* Generated classes give every type in their decorators; design:type
+       metadata would reference classes declared later in the same file */
+    "emitDecoratorMetadata": false,
+    "paths": {
+      "@fhirjs/core": ["../core/src/index.js"]
+    }
+  }
+}

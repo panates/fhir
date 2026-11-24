@@ -1,0 +1,53 @@
+{
+  "name": "@fhirjs/r4",
+  "description": "FHIR R4 (4.0.1) resources and data types as decorated classes, for @fhirjs/core",
+  "keywords": [
+    "fhir",
+    "hl7",
+    "hl7-fhir",
+    "healthcare",
+    "health",
+    "medical",
+    "interoperability",
+    "typescript",
+    "fhir-r4",
+    "r4",
+    "fhir-4.0.1",
+    "fhir-resources",
+    "fhir-model",
+    "data-types"
+  ],
+  "version": "0.0.0",
+  "private": true,
+  "license": "BSD-3-Clause",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@fhirjs/core": "workspace:^",
+    "tslib": "^2.9.1"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/panates/fhirjs.git",
+    "directory": "packages/r4"
+  },
+  "publishConfig": {
+    "access": "public",
+    "directory": "build",
+    "linkDirectory": true
+  },
+  "devDependencies": {
+    "expect": "^30.5.2",
+    "fhirpath": "5.2.3",
+    "valgen": "^7.0.13"
+  }
+}

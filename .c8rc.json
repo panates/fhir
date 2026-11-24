@@ -1,0 +1,6 @@
+{
+  "include": ["packages/*/src/**/*.ts"],
+  "reporter": ["text-summary", "html", "lcov"],
+  "all": true,
+  "exclude": ["packages/r4/src/**", "packages/r4b/src/**", "packages/r5/src/**"]
+}

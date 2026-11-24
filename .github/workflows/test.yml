@@ -1,0 +1,125 @@
+name: Test
+on:
+  # release.yml runs the tests before a release
+  workflow_call:
+
+  # Can be run manually
+  workflow_dispatch:
+
+  # dev, after a merge: its run saves the cache of the FHIR packages for pull requests
+  push:
+    branches:
+      - dev
+
+  # Pull requests into dev. A pull request's run can restore the caches of its base branch,
+  # which a push to a feature branch cannot: GitHub scopes caches to a branch, its base and the
+  # default branch (main, which has no runs of this workflow).
+  pull_request:
+    branches:
+      - dev
+
+# This workflow only reads the repository
+permissions:
+  contents: read
+
+# Only one run per branch or pull request at a time
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Everything but the tests tagged #slow, with coverage
+  test:
+    # A push whose commit message says no-test skips the tests
+    if: >
+      github.event_name != 'push' ||
+      !contains(github.event.head_commit.message, 'no-test')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # PostgreSQL for the facade example (examples/facade): its tests make a schema of their own
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      FHIR_PG_URL: postgres://postgres@localhost:5432/postgres
+    steps:
+      # Checks the repository out and installs what the lockfile pins
+      - name: Setup Environment
+        uses: panates/gh-setup-node@v2
+        with:
+          node-version: '24'
+          install: 'ci'
+
+      # rman build: lint, the manifests and circular imports (rman check), then tsc
+      - name: Build
+        run: pnpm build
+
+      - name: Check types of the tests
+        run: pnpm exec tsc -p tsconfig-test.json --noEmit
+
+      # The HL7 packages and the FHIRPath suites (about 1.3 GB). Without them the conformance
+      # tests skip. support/fetch-packages.mts names every package and version, so its hash is
+      # the key.
+      - name: Cache the FHIR packages
+        uses: actions/cache@v5
+        with:
+          path: support/fhir-packages
+          key: fhir-packages-${{ hashFiles('support/fetch-packages.mts') }}
+
+      # Downloads only what the cache did not restore
+      - name: Fetch the FHIR packages
+        run: pnpm fetch-packages
+
+      # The generated classes are committed; they must be what the generator writes from the
+      # core packages fetched above
+      - name: Check the generated sources
+        run: |
+          pnpm generate
+          changes=$(git status --porcelain -- packages/r4/src packages/r4b/src packages/r5/src)
+          if [ -n "$changes" ]; then
+            echo "$changes"
+            echo "::error::The generated sources differ from what pnpm generate writes"
+            exit 1
+          fi
+
+      - name: Run unit tests
+        run: pnpm exec c8 mocha --grep '#slow' --invert
+
+  # The tests tagged #slow, in parallel with the others: every example of every version, and
+  # every R4 invariant against fhirpath.js. Without coverage, which slows them by about 60%.
+  test-slow:
+    if: >
+      github.event_name != 'push' ||
+      !contains(github.event.head_commit.message, 'no-test')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Setup Environment
+        uses: panates/gh-setup-node@v2
+        with:
+          node-version: '24'
+          install: 'ci'
+
+      - name: Build
+        run: pnpm build
+
+      - name: Cache the FHIR packages
+        uses: actions/cache@v5
+        with:
+          path: support/fhir-packages
+          key: fhir-packages-${{ hashFiles('support/fetch-packages.mts') }}
+
+      - name: Fetch the FHIR packages
+        run: pnpm fetch-packages
+
+      - name: Run the slow tests
+        run: pnpm exec mocha --grep '#slow'
