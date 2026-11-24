@@ -40,6 +40,7 @@ In throwaway worktrees, with nothing pushed:
 
 - npm sets `latest` on a package's first publish whatever the dist-tag, so `npm install` gives the
   beta until 1.0.0.
-- npm provenance needs a public repository, and npm's Trusted Publishing (OIDC) is set up per
-  package on npmjs.com, which may need the package to exist first. Both are the user's to do.
+- npm's Trusted Publishing (OIDC) is set up per package on npmjs.com, which may need the package
+  to exist first: the user's to do. The repository is public (2026-11-24), as npm provenance
+  needs.
 - The npm badges of the package READMEs come after the first publish.

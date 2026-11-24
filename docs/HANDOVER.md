@@ -147,9 +147,9 @@ All are recorded in section 13 of the design document. In short:
    after them children of children, links of more hops (read) and columns by property.
 2. The GitHub settings were set with the user (2026-11-23): merge commits only, a ruleset on
    `main` (no deletion, no force push), read-only default workflow permission, Dependabot alerts.
-   Secret scanning and push protection still fail `repo-check`: GitHub took the request but kept
-   them off, as the plan of a private repository does not have them. That is the user's to
-   decide. Auto-merge is allowed; a ruleset on `dev` requires the `test` and `test-slow` checks,
+   The repository was made public with the user (2026-11-24): secret scanning, push protection
+   and private vulnerability reporting are on, and `SECURITY.md` names that form as the only
+   channel. Auto-merge is allowed; a ruleset on `dev` requires the `test` and `test-slow` checks,
    so a pull request with auto-merge waits for CI, and a push to `dev` needs them too.
 3. A test against HAPI's public test server writes test data to an outside service: ask the
    user first.
