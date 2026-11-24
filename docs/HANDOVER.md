@@ -7,8 +7,8 @@ say: how to work in the repository, what is open, and what to watch for.
 
 ## State
 
-- Pull requests [panates/fhir#1](https://github.com/panates/fhir/pull/1) (`feat/fhir-library`)
-  and [panates/fhir#2](https://github.com/panates/fhir/pull/2) (CI and the repository
+- Pull requests [panates/fhirjs#1](https://github.com/panates/fhirjs/pull/1) (`feat/fhir-library`)
+  and [panates/fhirjs#2](https://github.com/panates/fhirjs/pull/2) (CI and the repository
   standards) are merged into `dev`. `dev` did not exist before this work and was made from
   `main`.
 - 359 tests pass (`pnpm test`), 396 with `FHIR_PG_URL`; type checks are clean (`pnpm build`, `tsc -p tsconfig-test.json`).

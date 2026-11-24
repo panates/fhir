@@ -1,6 +1,25 @@
 {
   "name": "@fhirjs/server",
   "description": "FHIR REST server: a fetch-style handler over stores of your own",
+  "keywords": [
+    "fhir",
+    "hl7",
+    "hl7-fhir",
+    "healthcare",
+    "health",
+    "medical",
+    "interoperability",
+    "typescript",
+    "fhir-server",
+    "rest",
+    "rest-api",
+    "api-server",
+    "smart-on-fhir",
+    "authorization",
+    "bulk-data",
+    "facade",
+    "fetch"
+  ],
   "version": "0.0.0",
   "private": true,
   "license": "BSD-3-Clause",
@@ -23,7 +42,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/panates/fhir.git",
+    "url": "git+https://github.com/panates/fhirjs.git",
     "directory": "packages/server"
   },
   "publishConfig": {

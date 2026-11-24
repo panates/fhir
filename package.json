@@ -1,5 +1,5 @@
 {
-  "name": "fhir",
+  "name": "fhirjs",
   "private": true,
   "version": "0.0.0",
   "license": "BSD-3-Clause",
@@ -56,6 +56,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/panates/fhir.git"
+    "url": "git+https://github.com/panates/fhirjs.git"
   }
 }

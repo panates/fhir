@@ -1,4 +1,4 @@
-# fhir
+# fhirjs
 
 A FHIR library for Node.js: resources as decorated TypeScript classes, a JSON codec with
 validation, profiles and IG packages, a FHIRPath engine of its own, and a REST client with SMART

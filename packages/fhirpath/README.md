@@ -51,7 +51,7 @@ System type, which some invariants of R4 need.
 
 ## Documentation
 
-[The design of the library](https://github.com/panates/fhir/blob/main/docs/design/decorator-model.md)
+[The design of the library](https://github.com/panates/fhirjs/blob/main/docs/design/decorator-model.md)
 
 ## License
 

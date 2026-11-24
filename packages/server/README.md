@@ -148,8 +148,8 @@ new FhirServer({
 
 ## Documentation
 
-[The design of the server](https://github.com/panates/fhir/blob/main/docs/decisions/server.md),
-[Bulk Data export](https://github.com/panates/fhir/blob/main/docs/decisions/bulk-export.md)
+[The design of the server](https://github.com/panates/fhirjs/blob/main/docs/decisions/server.md),
+[Bulk Data export](https://github.com/panates/fhirjs/blob/main/docs/decisions/bulk-export.md)
 
 ## License
 
