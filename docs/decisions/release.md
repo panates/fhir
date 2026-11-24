@@ -51,10 +51,9 @@ In throwaway worktrees, with nothing pushed:
   the GitHub Release. Its merge back into `dev` was refused by the ruleset (required checks) and
   went through a pull request (panates/fhirjs#41).
 - npm had put `latest` on the placeholders; it was moved to `1.0.0-beta.1` by hand
-  (`npm dist-tag add`).
+  (`npm dist-tag add`), and the `beta` and `placeholder` dist-tags were removed
+  (`npm dist-tag rm`). Each of these takes the user's npm 2FA, one approval per package and tag.
 
 ## Open
 
 - The npm badges of the package READMEs.
-- The `beta` and `placeholder` dist-tags stay on `1.0.0-beta.1` and `0.0.0-placeholder` until
-  removed (`npm dist-tag rm`).
