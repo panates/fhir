@@ -10,9 +10,15 @@ group: true
 version:
   # Bump every package in the group, not only the ones that changed.
   cascade: group
-  # Every release is a beta (1.0.0-beta.0, 1.0.0-beta.1, ...) and goes to npm under the `beta`
-  # dist-tag. Remove this line for 1.0.0: the next release is then 1.0.0, on `latest`.
+  # Every release is a beta (1.0.0-beta.1, 1.0.0-beta.2, ...). Remove this line, and
+  # `publish.npm.latestPrereleases` below, for 1.0.0.
   preid: beta
+
+publish:
+  npm:
+    # Until 1.0.0 the betas are the releases: each goes to `latest`, so a plain `npm install`
+    # gets the newest. Remove this with `version.preid` above.
+    latestPrereleases: [beta]
 
 changelog:
   # One changelog for the whole release, at the repository root.

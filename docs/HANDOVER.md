@@ -17,8 +17,8 @@ say: how to work in the repository, what is open, and what to watch for.
   `support/fetch-packages.mts`; a pull request restores the cache `dev`'s runs save), checks that
   `pnpm generate` leaves the committed sources unchanged, and runs the tests with coverage. The
   ten tests tagged `#slow` run in a second job in parallel, without coverage.
-- Nothing is published yet; every package is at `0.0.0`. The release setup is built: rman, one
-  version for all packages, betas of 1.0.0 under the npm dist-tag `beta`, `release.yml` on a merge
+- `1.0.0-beta.1` is published (2026-11-24), every package on npm's `latest`. Releases: rman, one
+  version for all packages, betas of 1.0.0 until 1.0.0, `release.yml` on a merge
   into `main` ([`decisions/release.md`](decisions/release.md)). The npm scope `@fhirjs` belongs to
   the user.
 
@@ -140,7 +140,7 @@ All are recorded in section 13 of the design document. In short:
    starts one, waits for it and reads its files (`bulkExport()`); `_typeFilter`, `_elements`, the
    resources deleted since `_since` and a limit on exports at once came next, then a POST's
    `patient` and `includeAssociatedData` (Provenance). Next, to choose
-   with the user: XML or subscriptions. The first release is set up as betas of 1.0.0
+   with the user: XML or subscriptions. The first release, `1.0.0-beta.1`, is out as a beta of 1.0.0
    ([`decisions/release.md`](decisions/release.md)). A composite on one child row, chains
    and `_has` through a child's reference, and a link with conditions (sqb 6.4.0) are built
    ("Searches through children" in [`decisions/sql-facade.md`](decisions/sql-facade.md)), and
