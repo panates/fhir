@@ -1,5 +1,5 @@
-import { expect } from 'expect';
 import { FhirCodecError, FhirContext, getDecimalText } from '@fhirjs/core';
+import { expect } from 'expect';
 import { vg } from 'valgen';
 import {
   Element,

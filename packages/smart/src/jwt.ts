@@ -158,7 +158,7 @@ export async function verifyJwt(
       ),
       'key',
     );
-  let valid = false;
+  let valid: boolean;
   try {
     const key = await crypto.subtle.importKey(
       'jwk',

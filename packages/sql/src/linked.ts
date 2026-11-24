@@ -4,13 +4,13 @@
  * entities' own column names, types and transforms apply. For an
  * application that already describes its tables as sqb entities.
  */
+import { FhirServerError } from '@fhirjs/server';
 import { And, Eq, In, Raw, Select } from '@sqb/builder';
 import {
   EntityMetadata,
-  type Repository,
   prepareEntityFilter,
+  type Repository,
 } from '@sqb/connect';
-import { FhirServerError } from '@fhirjs/server';
 import type { SqlChild } from './children.js';
 import type { Column } from './columns.js';
 
@@ -267,13 +267,13 @@ export function linked(
     },
 
     join: (parentId, alias) => {
-      const { table, fkColumn, conditionSql, hops } = r();
+      const { table, fkColumn, conditionSql: condition, hops } = r();
       if (hops) return { table, on: hopsOn(hops, parentId, alias) };
       const on = `${alias}.${fkColumn} = ${parentId}`;
       return {
         table,
-        on: conditionSql
-          ? `${on} and ${conditionSql.replaceAll(`${ALIAS}.`, `${alias}.`)}`
+        on: condition
+          ? `${on} and ${condition.replaceAll(`${ALIAS}.`, `${alias}.`)}`
           : on,
       };
     },

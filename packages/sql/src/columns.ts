@@ -10,6 +10,11 @@
  * the rows that have no value, as FHIR asks.
  */
 import {
+  FhirServerError,
+  type SearchCriterion,
+  type SearchValue,
+} from '@fhirjs/server';
+import {
   And,
   Eq,
   Gt,
@@ -24,11 +29,6 @@ import {
   Raw,
   type Serializable,
 } from '@sqb/builder';
-import {
-  FhirServerError,
-  type SearchCriterion,
-  type SearchValue,
-} from '@fhirjs/server';
 import type { SqlDialect } from './dialect.js';
 
 /** An sqb condition */

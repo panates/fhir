@@ -9,18 +9,18 @@ import { r4Model } from '@fhirjs/r4';
 import {
   type ExportStorage,
   type FhirAuthenticator,
-  type FhirStore,
   FhirServer,
+  type FhirStore,
   MemoryExportStorage,
   MemoryStore,
   SmartAuthorizer,
 } from '@fhirjs/server';
 import { expect } from 'expect';
 import {
+  bearerToken,
+  type FhirBulkManifest,
   FhirClient,
   FhirClientError,
-  type FhirBulkManifest,
-  bearerToken,
 } from '../src/index.js';
 
 const fhir = new FhirContext(r4Model);

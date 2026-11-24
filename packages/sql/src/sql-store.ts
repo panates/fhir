@@ -3,6 +3,17 @@
  * searches and writes translated to SQL with sqb.
  */
 import {
+  FhirServerError,
+  type FhirStore,
+  type FhirStoreInteraction,
+  type SearchCriterion,
+  type SearchQuery,
+  type StoreCapabilities,
+  type StoredResource,
+  type StoredVersion,
+  type StorePage,
+} from '@fhirjs/server';
+import {
   And,
   Delete,
   Eq,
@@ -17,34 +28,23 @@ import {
   Update,
 } from '@sqb/builder';
 import type { SqbClient, SqbConnection } from '@sqb/connect';
+import { type ChildParam, type SqlChild } from './children.js';
 import {
-  type FhirStore,
-  type FhirStoreInteraction,
-  FhirServerError,
-  type SearchCriterion,
-  type SearchQuery,
-  type StoreCapabilities,
-  type StorePage,
-  type StoredResource,
-  type StoredVersion,
-} from '@fhirjs/server';
-import {
+  code,
   type Column,
+  columnSql,
   type Cond,
   type CustomParam,
+  date,
+  FALSE,
+  instant,
   type ParamSql,
   type SqlContext,
-  FALSE,
   SqlParams,
-  code,
-  columnSql,
-  instant,
-  date,
   token,
 } from './columns.js';
-import { type ChildParam, type SqlChild } from './children.js';
-import { type SqlDialect, postgres } from './dialect.js';
-import { type SqlRunner, lostElements, notKept } from './writes.js';
+import { postgres, type SqlDialect } from './dialect.js';
+import { lostElements, notKept, type SqlRunner } from './writes.js';
 
 /** A resource type kept in a table */
 export interface SqlTable {
@@ -701,9 +701,9 @@ export class SqlStore implements FhirStore {
    */
   private _referenceOf(
     t: Resolved,
-    code: string,
+    name: string,
   ): { fk: Column; target: string; child?: ChildRows } | undefined {
-    const p = t.params[code];
+    const p = t.params[name];
     if (typeof p !== 'object') return;
     if (p.reference) return p.reference;
     const c = childOf(p);

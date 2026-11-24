@@ -1,12 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { expect } from 'expect';
 import {
   FhirCodecError,
   FhirContext,
   FhirPackage,
   FhirPackageCache,
 } from '@fhirjs/core';
+import { expect } from 'expect';
 import { Observation, Patient, r4Model } from '../src/index.js';
 import { hasPackage, PACKAGE_CACHE, US_CORE } from './_support/packages.js';
 

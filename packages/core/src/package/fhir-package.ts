@@ -47,7 +47,9 @@ export class FhirPackage {
     readonly version: string,
     /** FHIR versions the package is for: ['4.0.1'] */
     readonly fhirVersions: string[],
-    resources: Iterable<any> | { entries: FhirPackageEntry[]; read: (file: string) => string },
+    resources:
+      | Iterable<any>
+      | { entries: FhirPackageEntry[]; read: (file: string) => string },
     /** Packages it depends on: name -> version */
     readonly dependencies: Record<string, string> = {},
   ) {
@@ -67,9 +69,13 @@ export class FhirPackage {
         this._add(entry);
       }
     } else {
-      const src = resources as { entries: FhirPackageEntry[]; read: (file: string) => string };
+      const src = resources as {
+        entries: FhirPackageEntry[];
+        read: (file: string) => string;
+      };
       this._read = src.read;
-      for (const e of src.entries) if (CONFORMANCE.has(e.resourceType)) this._add(e);
+      for (const e of src.entries)
+        if (CONFORMANCE.has(e.resourceType)) this._add(e);
     }
   }
 
@@ -139,16 +145,26 @@ export class FhirPackage {
    * `.index.json`, only the index is read now; without one, every file.
    */
   static fromDirectory(dir: string): FhirPackage {
-    const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(dir, 'package.json'), 'utf8'),
+    );
     const indexFile = path.join(dir, '.index.json');
-    const read = (file: string) => fs.readFileSync(path.join(dir, file), 'utf8');
+    const read = (file: string) =>
+      fs.readFileSync(path.join(dir, file), 'utf8');
     if (fs.existsSync(indexFile)) {
-      const entries = entriesOfIndex(JSON.parse(fs.readFileSync(indexFile, 'utf8')));
+      const entries = entriesOfIndex(
+        JSON.parse(fs.readFileSync(indexFile, 'utf8')),
+      );
       if (entries) return FhirPackage._create(manifest, { entries, read });
     }
     const resources: any[] = [];
     for (const file of fs.readdirSync(dir)) {
-      if (!file.endsWith('.json') || file === 'package.json' || file.startsWith('.')) continue;
+      if (
+        !file.endsWith('.json') ||
+        file === 'package.json' ||
+        file.startsWith('.')
+      )
+        continue;
       const res = parseResource(read(file));
       if (res) resources.push(res);
     }
@@ -159,10 +175,14 @@ export class FhirPackage {
   static fromTgz(data: Uint8Array): FhirPackage {
     const files = readTgz(data);
     const manifest = files.get('package/package.json');
-    if (!manifest) throw new Error('Not a FHIR package: no package/package.json');
+    if (!manifest)
+      throw new Error('Not a FHIR package: no package/package.json');
     const index = files.get('package/.index.json');
-    const read = (file: string) => files.get('package/' + file)!.toString('utf8');
-    const entries = index ? entriesOfIndex(JSON.parse(index.toString('utf8'))) : undefined;
+    const read = (file: string) =>
+      files.get('package/' + file)!.toString('utf8');
+    const entries = index
+      ? entriesOfIndex(JSON.parse(index.toString('utf8')))
+      : undefined;
     if (entries)
       return FhirPackage._create(JSON.parse(manifest.toString('utf8')), {
         entries: entries.filter(e => files.has('package/' + e.file)),
@@ -171,12 +191,19 @@ export class FhirPackage {
     const resources: any[] = [];
     for (const [name, content] of files) {
       // resources are files directly in package/ (not examples, not other/)
-      if (!/^package\/[^/]+\.json$/.test(name) || name === 'package/package.json') continue;
+      if (
+        !/^package\/[^/]+\.json$/.test(name) ||
+        name === 'package/package.json'
+      )
+        continue;
       if (name.startsWith('package/.')) continue;
       const res = parseResource(content.toString('utf8'));
       if (res) resources.push(res);
     }
-    return FhirPackage._create(JSON.parse(manifest.toString('utf8')), resources);
+    return FhirPackage._create(
+      JSON.parse(manifest.toString('utf8')),
+      resources,
+    );
   }
 
   private static _create(
@@ -198,7 +225,8 @@ function entriesOfIndex(index: any): FhirPackageEntry[] | undefined {
   if (!Array.isArray(index?.files)) return;
   const out: FhirPackageEntry[] = [];
   for (const f of index.files) {
-    if (typeof f?.filename !== 'string' || typeof f.resourceType !== 'string') continue;
+    if (typeof f?.filename !== 'string' || typeof f.resourceType !== 'string')
+      continue;
     // a name with a folder or ../ is not a file of the package folder
     if (f.filename.includes('/') || f.filename.includes('\\')) continue;
     out.push({

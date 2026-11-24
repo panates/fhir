@@ -29,7 +29,10 @@ export function markDecimalText(
   let map = (holder as any)[DECIMAL_TEXT] as Record<string, string> | undefined;
   if (!map) {
     map = Object.create(null) as Record<string, string>;
-    Object.defineProperty(holder, DECIMAL_TEXT, { value: map, configurable: true });
+    Object.defineProperty(holder, DECIMAL_TEXT, {
+      value: map,
+      configurable: true,
+    });
   }
   map[key] = text;
 }
@@ -69,13 +72,16 @@ export function setDecimal(
  */
 export function parseFhirJson(text: string): any {
   if (!LOSSY_NUMBER.test(text)) return JSON.parse(text);
-  return JSON.parse(text, function (this: any, key, value, context?: { source?: string }) {
-    if (typeof value === 'number' && context?.source !== undefined) {
-      const source = context.source;
-      if (source !== String(value)) markDecimalText(this, key, source);
-    }
-    return value;
-  });
+  return JSON.parse(
+    text,
+    function (this: any, key, value, context?: { source?: string }) {
+      if (typeof value === 'number' && context?.source !== undefined) {
+        const source = context.source;
+        if (source !== String(value)) markDecimalText(this, key, source);
+      }
+      return value;
+    },
+  );
 }
 
 /** The value to write for a decimal: its text when kept and rawJSON is there */

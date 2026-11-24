@@ -6,19 +6,19 @@
  * child without a key and one that is only read. Needs PostgreSQL:
  * FHIR_PG_URL; skipped without it.
  */
+import '@sqb/postgres';
 import { FhirContext } from '@fhirjs/core';
 import { r4Model } from '@fhirjs/r4';
 import { FhirServer } from '@fhirjs/server';
 import { SqbClient } from '@sqb/connect';
-import '@sqb/postgres';
 import { expect } from 'expect';
 import {
-  SqlStore,
-  type SqlTable,
   child,
   childTable,
   code,
   onlyElements,
+  SqlStore,
+  type SqlTable,
   string,
   token,
 } from '../src/index.js';
@@ -243,6 +243,7 @@ describe('SqlStore children', function () {
       { language: { coding: [{ system: LANGUAGE, code: 'tr' }] } },
     ]);
     // the languages as they are, the names gone: written
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { name: _name, ...noName } = read;
     expect((await send('PUT', `Patient/${p.id}`, noName)).status).toBe(200);
     // a language the table does not have: refused, the names not changed

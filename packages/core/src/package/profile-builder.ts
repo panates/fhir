@@ -1,4 +1,8 @@
-import type { FhirElementInfo, FhirModel, FhirTypeInfo } from '../fhir-model.js';
+import type {
+  FhirElementInfo,
+  FhirModel,
+  FhirTypeInfo,
+} from '../fhir-model.js';
 import type {
   FhirConstraintOptions,
   FhirDataSlice,
@@ -7,7 +11,8 @@ import type {
   FhirTypeMetadata,
 } from '../types.js';
 
-const FHIR_TYPE_EXT = 'http://hl7.org/fhir/StructureDefinition/structuredefinition-fhir-type';
+const FHIR_TYPE_EXT =
+  'http://hl7.org/fhir/StructureDefinition/structuredefinition-fhir-type';
 const SYSTEM_PREFIX = 'http://hl7.org/fhirpath/System.';
 
 const maxOf = (max: string | undefined): number | undefined =>
@@ -27,7 +32,8 @@ function typeCode(t: any): string {
   // R4 writes a few System types as _code with a json-type extension: a string
   if (typeof t.code !== 'string') return 'string';
   return t.code.startsWith(SYSTEM_PREFIX)
-    ? t.extension?.find((x: any) => x.url === FHIR_TYPE_EXT)?.valueUrl || 'string'
+    ? t.extension?.find((x: any) => x.url === FHIR_TYPE_EXT)?.valueUrl ||
+        'string'
     : t.code;
 }
 
@@ -83,7 +89,13 @@ export class ProfileBuilder {
     if (exact) return exact;
     const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const re = new RegExp(
-      '^' + esc(id) + path.split('.').map(seg => `\\.${esc(seg)}(?::[^.]+)?`).join('') + '$',
+      '^' +
+        esc(id) +
+        path
+          .split('.')
+          .map(seg => `\\.${esc(seg)}(?::[^.]+)?`)
+          .join('') +
+        '$',
     );
     for (const [key, ed] of this.byId) {
       if (!re.test(key)) continue;
@@ -98,8 +110,14 @@ export class ProfileBuilder {
     const out: FhirConstraintOptions[] = [];
     for (const c of ed?.constraint || []) {
       if (c.source && c.source !== this.sd.url) continue;
-      if (typeof c.key !== 'string' || typeof c.expression !== 'string') continue;
-      out.push({ key: c.key, severity: c.severity === 'warning' ? 'warning' : 'error', human: c.human ?? '', expression: c.expression });
+      if (typeof c.key !== 'string' || typeof c.expression !== 'string')
+        continue;
+      out.push({
+        key: c.key,
+        severity: c.severity === 'warning' ? 'warning' : 'error',
+        human: c.human ?? '',
+        expression: c.expression,
+      });
     }
     return out;
   }
@@ -134,14 +152,22 @@ export class ProfileBuilder {
       if (seg.includes(':')) continue; // slices: below, with their element
       const el = baseType.getElement(seg);
       if (!el) {
-        if (ed.max !== '0') this.warn(`${this.sd.url}: ${ed.id} is not an element of ${baseType.name}`);
+        if (ed.max !== '0')
+          this.warn(
+            `${this.sd.url}: ${ed.id} is not an element of ${baseType.name}`,
+          );
         continue;
       }
       Object.assign(elements, this.element(baseType, el, ed, `${name}.${seg}`));
       // invariants on a primitive element stay with the element; on a complex
       // one, they are the constrained type's (element() made one for them)
       const own = this.ownConstraints(ed);
-      if (own.length && el.types.every(t => this.model.getType(t.code).kind === 'primitive-type')) {
+      if (
+        own.length &&
+        el.types.every(
+          t => this.model.getType(t.code).kind === 'primitive-type',
+        )
+      ) {
         const key = el.types[0].key;
         elements[key] ??= {};
         elementConstraints[key] = own;
@@ -153,7 +179,13 @@ export class ProfileBuilder {
       }
     }
 
-    if (!root && !Object.keys(elements).length && !dataSlicing.length && !constraints.length) return;
+    if (
+      !root &&
+      !Object.keys(elements).length &&
+      !dataSlicing.length &&
+      !constraints.length
+    )
+      return;
     const meta: FhirTypeMetadata = {
       kind: root?.kind || 'profile',
       name,
@@ -178,7 +210,8 @@ export class ProfileBuilder {
     const diff: FhirElementOptions = {};
     if (ed.min > el.min) diff.min = ed.min;
     const max = maxOf(ed.max);
-    if (max !== undefined && max < el.max) diff.max = max === Infinity ? '*' : max;
+    if (max !== undefined && max < el.max)
+      diff.max = max === Infinity ? '*' : max;
     const vs = ed.binding?.valueSet;
     if (
       vs &&
@@ -190,8 +223,12 @@ export class ProfileBuilder {
     Object.assign(diff, fixedOrPattern(ed));
 
     // Types kept (a choice may be narrowed), and constrained content
-    const codes: string[] = Array.isArray(ed.type) ? ed.type.map(typeCode) : el.types.map(t => t.code);
-    const kept = el.types.filter(t => codes.includes(t.code) || el.types.length === 1);
+    const codes: string[] = Array.isArray(ed.type)
+      ? ed.type.map(typeCode)
+      : el.types.map(t => t.code);
+    const kept = el.types.filter(
+      t => codes.includes(t.code) || el.types.length === 1,
+    );
     const narrowed = el.isChoice && kept.length < el.types.length;
     const out: Record<string, FhirElementOptions> = {};
     let changedType = false;
@@ -201,11 +238,17 @@ export class ProfileBuilder {
       let type: string | undefined;
       // A choice constrained per type: value[x]:valueQuantity
       const typeSliceId = el.isChoice ? `${ed.id}:${t.key}` : undefined;
-      const contentId = typeSliceId && this.byId.has(typeSliceId) ? typeSliceId : ed.id;
+      const contentId =
+        typeSliceId && this.byId.has(typeSliceId) ? typeSliceId : ed.id;
       if (target.kind !== 'primitive-type' && target.kind !== 'resource')
-        type = this.level(target, contentId, el.isChoice ? `${name}:${t.key}` : name);
+        type = this.level(
+          target,
+          contentId,
+          el.isChoice ? `${name}:${t.key}` : name,
+        );
       if (!type) {
-        const profileUrl = ed.type?.find((x: any) => typeCode(x) === t.code)?.profile?.[0];
+        const profileUrl = ed.type?.find((x: any) => typeCode(x) === t.code)
+          ?.profile?.[0];
         const p = profileUrl ? this.model.findProfile(profileUrl) : undefined;
         if (p && p.isA(t.code)) type = p.name;
       }
@@ -218,7 +261,8 @@ export class ProfileBuilder {
       if (Object.keys(diff).length) out[el.types[0].key] = diff;
       return out;
     }
-    for (const t of kept) out[t.key] = { ...diff, type: typed[t.key] || t.code };
+    for (const t of kept)
+      out[t.key] = { ...diff, type: typed[t.key] || t.code };
     return out;
   }
 
@@ -248,7 +292,9 @@ export class ProfileBuilder {
             const fp = fixedOrPattern(s);
             v = fp.fixed ?? fp.pattern;
           } else if (d.path === 'url' && itemType.isA('Extension')) {
-            v = fixedOrPattern(this.byId.get(`${s.id}.url`) || {}).fixed ?? s.type?.[0]?.profile?.[0];
+            v =
+              fixedOrPattern(this.byId.get(`${s.id}.url`) || {}).fixed ??
+              s.type?.[0]?.profile?.[0];
           } else {
             const child = this.findBelow(s.id, d.path);
             const fp = child ? fixedOrPattern(child) : {};
@@ -258,7 +304,10 @@ export class ProfileBuilder {
               v = getAt(own.fixed ?? own.pattern, d.path);
             }
           }
-        } else if (d.type === 'type' && (d.path === '$this' || d.path === 'resource')) {
+        } else if (
+          d.type === 'type' &&
+          (d.path === '$this' || d.path === 'resource')
+        ) {
           const code = s.type?.[0]?.code;
           v = code;
           if (v !== undefined) {
@@ -267,7 +316,9 @@ export class ProfileBuilder {
             continue;
           }
         } else {
-          this.warn(`${this.sd.url}: ${ed.id} slices by ${d.type} (${d.path}): not supported, slicing not checked`);
+          this.warn(
+            `${this.sd.url}: ${ed.id} slices by ${d.type} (${d.path}): not supported, slicing not checked`,
+          );
           return;
         }
         if (v === undefined && d.path === '$this' && s.binding?.valueSet) {
@@ -282,7 +333,9 @@ export class ProfileBuilder {
           continue;
         }
         if (v === undefined) {
-          this.warn(`${this.sd.url}: ${s.id} has no value for discriminator ${d.path}: slicing not checked`);
+          this.warn(
+            `${this.sd.url}: ${s.id} has no value for discriminator ${d.path}: slicing not checked`,
+          );
           return;
         }
         if (d.path === '$this') {
@@ -295,8 +348,16 @@ export class ProfileBuilder {
         const url = s.type?.[0]?.profile?.[0];
         sliceType = url ? this.model.findProfile(url)?.name : undefined;
       }
-      if (!sliceType && itemType.kind !== 'primitive-type' && itemType.kind !== 'resource')
-        sliceType = this.level(itemType, s.id, `${name}.${el.name}:${sliceName}`);
+      if (
+        !sliceType &&
+        itemType.kind !== 'primitive-type' &&
+        itemType.kind !== 'resource'
+      )
+        sliceType = this.level(
+          itemType,
+          s.id,
+          `${name}.${el.name}:${sliceName}`,
+        );
       slices.push({
         name: sliceName,
         min: s.min ?? 0,
@@ -307,6 +368,10 @@ export class ProfileBuilder {
       });
     }
     if (!slices.length && ed.slicing.rules !== 'closed') return;
-    return { element: el.types[0].key, rules: ed.slicing.rules || 'open', slices };
+    return {
+      element: el.types[0].key,
+      rules: ed.slicing.rules || 'open',
+      slices,
+    };
   }
 }

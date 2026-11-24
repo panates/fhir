@@ -13,8 +13,9 @@ import {
   TRUE,
   union,
   withScope,
-} from './evaluate.js';
+} from './context.js';
 import {
+  decimalText,
   FhirPathError,
   FpQuantity,
   FpTemporal,
@@ -24,7 +25,6 @@ import {
   primitiveValue,
   quantityOf,
   quantityPair,
-  decimalText,
   systemType,
   typeLabel,
 } from './values.js';
@@ -1083,9 +1083,9 @@ function decimalBoundary(
   if (r !== 0n && (dir < 0 ? b < 0n : b > 0n)) q += dir < 0 ? -1n : 1n;
   const neg = q < 0n || (q === 0n && b < 0n);
   const digits = (q < 0n ? -q : q).toString().padStart(places + 1, '0');
-  const int = digits.slice(0, digits.length - places);
+  const whole = digits.slice(0, digits.length - places);
   const frac = places ? '.' + digits.slice(digits.length - places) : '';
-  return (neg ? '-' : '') + int + frac;
+  return (neg ? '-' : '') + whole + frac;
 }
 
 /** The precision (digits) of each part: year 4, month 6, day 8, hour 10, minute 12, second 14, millisecond 17 */

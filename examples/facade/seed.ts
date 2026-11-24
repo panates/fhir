@@ -152,8 +152,8 @@ export function seedRows(): Rows {
     if (first) {
       const diagnoses = [first];
       if (n % 3 === 0) diagnoses.push(codes[(codes.indexOf(first) + 1) % 4]);
-      diagnoses.forEach((code, i) =>
-        encounter_diagnoses.push({ encounter_id: n, code, rank: i + 1 }),
+      diagnoses.forEach((code, k) =>
+        encounter_diagnoses.push({ encounter_id: n, code, rank: k + 1 }),
       );
     }
   }

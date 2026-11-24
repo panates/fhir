@@ -1,7 +1,6 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { createRequire } from 'node:module';
-import { expect } from 'expect';
+import path from 'node:path';
 import {
   type FhirConstraintOptions,
   FhirContext,
@@ -9,6 +8,7 @@ import {
   type FhirTypeInfo,
 } from '@fhirjs/core';
 import { FhirPath } from '@fhirjs/fhirpath';
+import { expect } from 'expect';
 import {
   hasPackage,
   packagePath,

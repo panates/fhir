@@ -1,11 +1,11 @@
-import { describeInvariantCheck } from '../../core/test/_support/invariant-check.js';
+import { packagePath } from '../../core/test/_support/conformance.js';
 import {
   describeFhirPathSuite,
   KNOWN_BEFORE_R5,
   KNOWN_FAILURES,
   SKIPPED_GROUPS,
 } from '../../core/test/_support/fhirpath-suite.js';
-import { packagePath } from '../../core/test/_support/conformance.js';
+import { describeInvariantCheck } from '../../core/test/_support/invariant-check.js';
 import { r4Model } from '../src/index.js';
 
 describeFhirPathSuite({

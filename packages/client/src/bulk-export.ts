@@ -4,8 +4,8 @@
  * Retry-After says, and the files read a line at a time as resources.
  */
 import { parseFhirJson } from '@fhirjs/core';
-import { FhirClientError } from './fhir-client-error.js';
 import type { FhirClient, FhirRequestOptions } from './fhir-client.js';
+import { FhirClientError } from './fhir-client-error.js';
 
 export interface FhirBulkExportOptions extends FhirRequestOptions {
   /** What to export: the server (default), the patients, or a group's patients */

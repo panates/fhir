@@ -1,6 +1,6 @@
-export type { FhirPathCheckOptions, FhirPathIssue } from './check.js';
 export type * from './ast.js';
-export type { EvalContext, FhirPathEnv } from './evaluate.js';
+export type { FhirPathCheckOptions, FhirPathIssue } from './check.js';
+export type { EvalContext, FhirPathEnv } from './context.js';
 export * from './fhirpath.js';
 export * from './lexer.js';
 export * from './model.js';

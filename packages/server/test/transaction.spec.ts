@@ -3,8 +3,8 @@ import { FhirContext } from '@fhirjs/core';
 import { r4Model } from '@fhirjs/r4';
 import { expect } from 'expect';
 import {
-  type FhirStore,
   FhirServer,
+  type FhirStore,
   MemoryStore,
   type StoreCapabilities,
 } from '../src/index.js';

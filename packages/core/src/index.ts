@@ -14,5 +14,5 @@ export * from './package/tgz.js';
 export * from './package/value-set-resolver.js';
 export * from './resource-type.js';
 export * from './search-parameter.js';
-export * from './validation/fhir-validator.js';
 export type * from './types.js';
+export * from './validation/fhir-validator.js';

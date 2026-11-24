@@ -27,7 +27,12 @@ const p = fhir.decode<TrPatient>(`{
   "name": [{ "family": "Yılmaz", "given": ["Ayşe"] }],
   "birthDate": "1990-01-01"
 }`);
-console.log(p instanceof TrPatient, p.tckn.value, p.religion?.text, p.birthWeight);
+console.log(
+  p instanceof TrPatient,
+  p.tckn.value,
+  p.religion?.text,
+  p.birthWeight,
+);
 
 // Writing: the slice gets its system, the extensions their entries
 const q = new TrPatient({
@@ -42,5 +47,6 @@ try {
   fhir.encode(new TrPatient({ name: [{ family: 'Kaya' }] }));
 } catch (e) {
   if (!(e instanceof FhirCodecError)) throw e;
-  for (const i of e.issues) console.log(`${i.code} ${i.expression}: ${i.diagnostics}`);
+  for (const i of e.issues)
+    console.log(`${i.code} ${i.expression}: ${i.diagnostics}`);
 }

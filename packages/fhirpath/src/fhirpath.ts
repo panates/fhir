@@ -1,16 +1,16 @@
+import type { FhirPathNode } from './ast.js';
 import {
   checkExpression,
   type FhirPathCheckOptions,
   type FhirPathIssue,
 } from './check.js';
-import type { FhirPathNode } from './ast.js';
 import {
-  compile,
   type EvalContext,
   type FhirPathEnv,
   type Fn,
   toBool,
-} from './evaluate.js';
+} from './context.js';
+import { compile } from './evaluate.js';
 import type { FhirPathModel } from './model.js';
 import { parse } from './parser.js';
 import { FpQuantity, FpTemporal, Item } from './values.js';

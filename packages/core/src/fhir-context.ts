@@ -1,10 +1,17 @@
 import { FhirCodecError } from './codec/fhir-codec-error.js';
 import { FhirCodecs } from './codec/fhir-codecs.js';
-import type { FhirIssue } from './codec/types.js';
-import type { FhirCodecMode, FhirCodecOptions } from './codec/types.js';
+import type {
+  FhirCodecMode,
+  FhirCodecOptions,
+  FhirIssue,
+} from './codec/types.js';
 import { parseFhirJson } from './decimal.js';
 import { getOwnTypeMetadata } from './decorators.js';
-import type { FhirModel, FhirPackageReport, FhirTypeInfo } from './fhir-model.js';
+import type {
+  FhirModel,
+  FhirPackageReport,
+  FhirTypeInfo,
+} from './fhir-model.js';
 import type { FhirPackage } from './package/fhir-package.js';
 import { resourceTypeOf } from './resource-type.js';
 import { FhirInvariants } from './validation/fhir-validator.js';
@@ -60,8 +67,10 @@ export class FhirContext {
     } = {},
   ) {
     const { types, packages, ...codecOptions } = options;
-    this.model = types?.length || packages?.length ? model.extend(types || []) : model;
-    for (const pkg of packages || []) this.packageReports.push(this.model.loadPackage(pkg));
+    this.model =
+      types?.length || packages?.length ? model.extend(types || []) : model;
+    for (const pkg of packages || [])
+      this.packageReports.push(this.model.loadPackage(pkg));
     this.options = codecOptions;
   }
 
@@ -132,31 +141,58 @@ export class FhirContext {
     // Profiles to check against: those given, and those meta.profile names
     const profileTypes: FhirTypeInfo[] = [];
     const addProfile = (ref: string) => {
-      const t = ref.includes('/') ? this.model.findProfile(ref) : this.model.hasType(ref) ? this.model.getType(ref) : undefined;
+      const t = ref.includes('/')
+        ? this.model.findProfile(ref)
+        : this.model.hasType(ref)
+          ? this.model.getType(ref)
+          : undefined;
       if (t && t.isProfile && !profileTypes.includes(t)) profileTypes.push(t);
     };
-    for (const p of typeof profile === 'string' ? [profile] : profile || []) addProfile(p);
+    for (const p of typeof profile === 'string' ? [profile] : profile || [])
+      addProfile(p);
 
     if (isInstance) {
       value = json;
       json = collect(() => this.encode(json, type, codecOptions));
     } else {
-      value = collect(() => this.decode(json, typeName ?? profileTypes[0]?.name, codecOptions));
+      value = collect(() =>
+        this.decode(json, typeName ?? profileTypes[0]?.name, codecOptions),
+      );
     }
     // a profile given that decoding did not use: its structure too
     for (const p of profileTypes.slice(isInstance ? 0 : typeName ? 0 : 1))
-      if (json && typeof json === 'object') collect(() => this.codecs('decode', codecOptions).run(p.name, json));
+      if (json && typeof json === 'object')
+        collect(() => this.codecs('decode', codecOptions).run(p.name, json));
 
-    if (invariants !== false && json && typeof json === 'object' && typeof json.resourceType === 'string') {
-      for (const url of Array.isArray(json.meta?.profile) ? json.meta.profile : [])
+    if (
+      invariants !== false &&
+      json &&
+      typeof json === 'object' &&
+      typeof json.resourceType === 'string'
+    ) {
+      for (const url of Array.isArray(json.meta?.profile)
+        ? json.meta.profile
+        : [])
         if (typeof url === 'string') addProfile(url);
-      const base = typeName ? this.model.getType(typeName) : this.model.hasType(json.resourceType) ? this.model.getType(json.resourceType) : undefined;
-      const types = profileTypes.filter(p => !base || p.isA(base.profileOf?.name ?? base.name));
+      const base = typeName
+        ? this.model.getType(typeName)
+        : this.model.hasType(json.resourceType)
+          ? this.model.getType(json.resourceType)
+          : undefined;
+      const types = profileTypes.filter(
+        p => !base || p.isA(base.profileOf?.name ?? base.name),
+      );
       if (base && !types.length) types.push(base);
-      if (types.length) issues.push(...this.invariants.check(json, types, json.resourceType));
+      if (types.length)
+        issues.push(...this.invariants.check(json, types, json.resourceType));
     }
 
-    const kept = warnings === false ? issues.filter(i => i.severity !== 'warning' && i.severity !== 'information') : issues;
+    const kept =
+      warnings === false
+        ? issues.filter(
+            i => i.severity !== 'warning' && i.severity !== 'information',
+          )
+        : issues;
     return {
       valid: !kept.some(i => i.severity === 'error' || i.severity === 'fatal'),
       issues: kept,
@@ -164,8 +200,19 @@ export class FhirContext {
       outcome: () => ({
         resourceType: 'OperationOutcome',
         issue: kept.length
-          ? kept.map(i => ({ severity: i.severity, code: i.code, diagnostics: i.diagnostics, expression: [i.expression] }))
-          : [{ severity: 'information', code: 'informational', diagnostics: 'No issues' }],
+          ? kept.map(i => ({
+              severity: i.severity,
+              code: i.code,
+              diagnostics: i.diagnostics,
+              expression: [i.expression],
+            }))
+          : [
+              {
+                severity: 'information',
+                code: 'informational',
+                diagnostics: 'No issues',
+              },
+            ],
       }),
     };
   }

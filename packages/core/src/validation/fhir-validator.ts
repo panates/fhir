@@ -129,11 +129,11 @@ export class FhirInvariants {
                 : undefined;
             if (!rt) return;
             // contained: %rootResource stays the container; a Bundle entry is its own root
-            const contained = et.key === 'contained';
+            const isContained = et.key === 'contained';
             this._walk(
               item,
               rt,
-              contained ? root : item,
+              isContained ? root : item,
               item,
               at,
               issues,

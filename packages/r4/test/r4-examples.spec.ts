@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
-import { expect } from 'expect';
 import { FhirCodecError, FhirContext } from '@fhirjs/core';
+import { expect } from 'expect';
 import { r4Model } from '../src/index.js';
 import {
   hasPackage,

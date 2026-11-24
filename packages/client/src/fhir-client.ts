@@ -5,9 +5,9 @@ import {
   resourceTypeOf,
 } from '@fhirjs/core';
 import {
+  exportRequest,
   FhirBulkExport,
   type FhirBulkExportOptions,
-  exportRequest,
 } from './bulk-export.js';
 import { FhirClientError } from './fhir-client-error.js';
 import { type FhirSearchParams, toSearchParams } from './search-params.js';
@@ -403,6 +403,7 @@ export class FhirClient {
   async bulkExport(
     options: FhirBulkExportOptions = {},
   ): Promise<FhirBulkExport> {
+    /* eslint-disable @typescript-eslint/no-unused-vars */
     const {
       level: _l,
       types: _t,
@@ -414,6 +415,7 @@ export class FhirClient {
       params: _p,
       ...request
     } = options;
+    /* eslint-enable @typescript-eslint/no-unused-vars */
     const kickOff = exportRequest(options);
     const r = await this.request(kickOff.method, kickOff.path, {
       ...request,
