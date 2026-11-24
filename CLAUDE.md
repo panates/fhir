@@ -29,9 +29,10 @@ Node 22 or later, pnpm 12.
 ```bash
 pnpm install
 pnpm fetch-packages   # HL7 packages, US Core, the FHIRPath suites (about 1.3 GB, not committed)
-pnpm build
+pnpm build            # rman build: lint, rman check (manifests, circular imports), clean, tsc
 pnpm test
 pnpm generate         # rewrites packages/{r4,r4b,r5}/src from the HL7 packages
+pnpm format           # prettier; pnpm lint fixes what eslint can
 ```
 
 Check the types of the tests with `pnpm exec tsc -p tsconfig-test.json --noEmit`. CI
@@ -59,9 +60,16 @@ a feature branch: open a pull request to get a run.
 - **`emitDecoratorMetadata` stays off** for the generated packages and the tests. With it on, a
   class that refers to one declared later in the same file fails with a TDZ ReferenceError
   (`TimingRepeat`).
-- **Delete the `*.tsbuildinfo` files with `build/`.** `pnpm build` is `tsc -b`; with the build info
-  left behind it takes a package as up to date and emits nothing, and the next package fails with
-  `Cannot find module '@fhirjs/core'`.
+- **Delete the `*.tsbuildinfo` files with `build/`** when you run `tsc -b` yourself (`pnpm
+  check-types`): with the build info left behind it takes a package as up to date and emits
+  nothing. `pnpm build` cleans both first.
+- **A package is published from its `build/`** (`publishConfig.directory`), so its `exports` name
+  `./index.js`, and pnpm links the workspace packages to their `build/` (`linkDirectory`): run
+  `pnpm build` before `pnpm examples`. A package's `tsconfig.json` maps its siblings to their
+  sources (the tests, `rman check`); the root `tsconfig-build.json` maps them to their `build/`.
+- **Releases** are made by `release.yml` on a merge into `main`: one version for every package,
+  a beta for now (`version.preid: beta` in `.rmanrc.yml`, npm dist-tag `beta`). Decided in
+  [`docs/decisions/release.md`](docs/decisions/release.md).
 - **valgen is Panates' own package.** Report a problem found in valgen to its maintainers; do not
   work around it or patch it here. The codec needs valgen 7.0.13 or later.
 - **The FHIRPath suites are read at a fixed commit** of `FHIR/fhir-test-cases`, set in

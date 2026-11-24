@@ -7,15 +7,28 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./build/index.d.ts",
-      "default": "./build/index.js"
+      "types": "./index.d.ts",
+      "default": "./index.js"
     },
     "./package.json": "./package.json"
   },
   "engines": {
-    "node": ">=22.0"
+    "node": ">=22"
   },
   "dependencies": {
     "tslib": "^2.9.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/panates/fhir.git",
+    "directory": "packages/fhirpath"
+  },
+  "publishConfig": {
+    "access": "public",
+    "directory": "build",
+    "linkDirectory": true
+  },
+  "devDependencies": {
+    "expect": "^30.5.2"
   }
 }

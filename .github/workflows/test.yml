@@ -1,5 +1,8 @@
 name: Test
 on:
+  # release.yml runs the tests before a release
+  workflow_call:
+
   # Can be run manually
   workflow_dispatch:
 
@@ -56,6 +59,7 @@ jobs:
           node-version: '24'
           install: 'ci'
 
+      # rman build: lint, the manifests and circular imports (rman check), then tsc
       - name: Build
         run: pnpm build
 

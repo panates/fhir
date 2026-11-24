@@ -1,6 +1,22 @@
 {
   "extends": "../../tsconfig-base.json",
   "include": ["src"],
-  "references": [{ "path": "../core" }, { "path": "../smart" }],
-  "compilerOptions": { "rootDir": "src", "outDir": "./build", "noEmit": false }
+  "exclude": ["build"],
+  "references": [
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../smart"
+    }
+  ],
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "./build",
+    "noEmit": false,
+    "paths": {
+      "@fhirjs/core": ["../core/src/index.js"],
+      "@fhirjs/smart": ["../smart/src/index.js"]
+    }
+  }
 }

@@ -17,8 +17,10 @@ say: how to work in the repository, what is open, and what to watch for.
   `support/fetch-packages.mts`; a pull request restores the cache `dev`'s runs save), checks that
   `pnpm generate` leaves the committed sources unchanged, and runs the tests with coverage. The
   ten tests tagged `#slow` run in a second job in parallel, without coverage.
-- Every package is `"private": true` at version `0.0.0`; nothing is published yet. The npm scope
-  `@fhirjs` belongs to the user.
+- Nothing is published yet; every package is at `0.0.0`. The release setup is built: rman, one
+  version for all packages, betas of 1.0.0 under the npm dist-tag `beta`, `release.yml` on a merge
+  into `main` ([`decisions/release.md`](decisions/release.md)). The npm scope `@fhirjs` belongs to
+  the user.
 
 ## Packages
 
@@ -49,9 +51,9 @@ pnpm test
   `linguist-generated`). After a change to `support/build-models.mts`, run `pnpm generate` and
   commit what it writes. A generator change for one version must leave the others unchanged.
   Check it with the count of `@FhirElement` in each version (R4 5,534, R4B 5,652, R5 7,097) and of search parameters (R4 1,387, R4B 1,425, R5 1,239).
-- **Delete the `*.tsbuildinfo` files with `build/`.** `pnpm build` is `tsc -b`; with the build
-  info left behind it takes a package as up to date and emits nothing, and the next package fails
-  with `Cannot find module '@fhirjs/core'`.
+- **`pnpm build` is `rman build`**: eslint, `rman check` (the manifests, circular imports), a
+  clean, then `tsc -b` per package. Delete the `*.tsbuildinfo` files with `build/` when you run
+  `tsc -b` yourself: with the build info left behind it emits nothing.
 - **`experimentalDecorators: true` must stay on** (legacy decorators, as opra uses them).
 - **`emitDecoratorMetadata` is off** for the generated packages and the tests. With it on, a
   class that refers to one declared later in the same file fails with a TDZ ReferenceError
@@ -138,7 +140,8 @@ All are recorded in section 13 of the design document. In short:
    starts one, waits for it and reads its files (`bulkExport()`); `_typeFilter`, `_elements`, the
    resources deleted since `_since` and a limit on exports at once came next, then a POST's
    `patient` and `includeAssociatedData` (Provenance). Next, to choose
-   with the user: XML or subscriptions; a first release. A composite on one child row, chains
+   with the user: XML or subscriptions. The first release is set up as betas of 1.0.0
+   ([`decisions/release.md`](decisions/release.md)). A composite on one child row, chains
    and `_has` through a child's reference, and a link with conditions (sqb 6.4.0) are built
    ("Searches through children" in [`decisions/sql-facade.md`](decisions/sql-facade.md)), and
    after them children of children, links of more hops (read) and columns by property.
