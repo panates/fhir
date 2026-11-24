@@ -68,7 +68,7 @@ a feature branch: open a pull request to get a run.
   `pnpm build` before `pnpm examples`. A package's `tsconfig.json` maps its siblings to their
   sources (the tests, `rman check`); the root `tsconfig-build.json` maps them to their `build/`.
 - **Releases** are made by `release.yml` on a merge into `main`: one version for every package,
-  a beta for now (`version.preid: beta` in `.rmanrc.yml`, npm dist-tag `beta`). Decided in
+  a beta for now (`version.preid: beta` in `.rmanrc.yml`, each on npm's `latest`). Decided in
   [`docs/decisions/release.md`](docs/decisions/release.md).
 - **valgen is Panates' own package.** Report a problem found in valgen to its maintainers; do not
   work around it or patch it here. The codec needs valgen 7.0.13 or later.
