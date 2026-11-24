@@ -3,9 +3,9 @@ import { r4Model } from '@fhirjs/r4';
 import { expect } from 'expect';
 import {
   type FhirAuthorizer,
+  FhirServer,
   type FhirServerOptions,
   type FhirStore,
-  FhirServer,
   MemoryStore,
   RoutingStore,
 } from '../src/index.js';

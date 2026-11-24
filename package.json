@@ -5,17 +5,21 @@
   "license": "BSD-3-Clause",
   "type": "module",
   "engines": {
-    "node": ">=22.0"
+    "node": ">=22"
   },
   "packageManager": "pnpm@12.10.1",
   "scripts": {
-    "fetch-packages": "node support/fetch-packages.mts",
-    "generate": "node support/build-models.mts --version=R4 && node support/build-models.mts --version=R4B && node support/build-models.mts --version=R5",
-    "build": "tsc -b packages/smart/tsconfig-build.json packages/fhirpath/tsconfig-build.json packages/core/tsconfig-build.json packages/r4/tsconfig-build.json packages/r4b/tsconfig-build.json packages/r5/tsconfig-build.json packages/client/tsconfig-build.json packages/server/tsconfig-build.json packages/sql/tsconfig-build.json",
-    "check-types": "tsc -b",
-    "examples": "tsc -p examples && node examples/build/profile/run.js",
+    "build": "rman build",
     "test": "mocha",
     "citest": "c8 mocha",
+    "precitest": "rman clean",
+    "lint": "rman lint",
+    "check": "rman check",
+    "format": "rman format",
+    "check-types": "tsc -b",
+    "fetch-packages": "node support/fetch-packages.mts",
+    "generate": "node support/build-models.mts --version=R4 && node support/build-models.mts --version=R4B && node support/build-models.mts --version=R5",
+    "examples": "tsc -p examples && node examples/build/profile/run.js",
     "bench": "node support/bench-codec.mts"
   },
   "devDependencies": {
@@ -26,8 +30,11 @@
     "@fhirjs/r4b": "workspace:*",
     "@fhirjs/r5": "workspace:*",
     "@fhirjs/server": "workspace:*",
-    "@fhirjs/sql": "workspace:*",
     "@fhirjs/smart": "workspace:*",
+    "@fhirjs/sql": "workspace:*",
+    "@panates/eslint-config": "^2.4.0",
+    "@panates/eslint-config-ts": "^2.4.0",
+    "@panates/rman-preset": "^2.2.2",
     "@panates/tsconfig": "^2.1.8",
     "@sqb/builder": "6.4.0",
     "@sqb/connect": "6.4.0",
@@ -40,10 +47,15 @@
     "c8": "^12.0.0",
     "expect": "^30.5.2",
     "fhirpath": "5.2.3",
+    "globals": "^17.14.0",
     "mocha": "^12.0.3",
     "prettier": "^3.10.1",
     "tslib": "^2.9.1",
     "typescript": "^6.0.3",
     "valgen": "^7.0.13"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/panates/fhir.git"
   }
 }

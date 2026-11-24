@@ -182,8 +182,8 @@ export function childTable(options: ChildTableOptions): SqlChild {
       if (!parentIds.length) return byParent;
       const params: Row = {};
       const list = parentIds
-        .map((id, i) => {
-          params[`p${i}`] = id;
+        .map((pid, i) => {
+          params[`p${i}`] = pid;
           return `:p${i}`;
         })
         .join(', ');
@@ -205,8 +205,8 @@ export function childTable(options: ChildTableOptions): SqlChild {
       );
       for (const { [PARENT]: parent, [ROW]: own, ...row } of rows) {
         nested.forEach(([name], i) => (row[name] = ofRows[i].get(own) ?? []));
-        const list = byParent.get(parent);
-        if (list) list.push(row);
+        const group = byParent.get(parent);
+        if (group) group.push(row);
         else byParent.set(parent, [row]);
       }
       return byParent;

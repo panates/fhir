@@ -3,9 +3,7 @@
  * searched and written through `@fhirjs/sql`. The tables are described
  * here; rows are mapped to resources and back in mapping.ts.
  */
-import type { SqbClient } from '@sqb/connect';
 import {
-  SqlStore,
   child,
   childTable,
   code,
@@ -13,29 +11,32 @@ import {
   constant,
   date,
   day,
-  linked,
   instant,
+  linked,
   number,
   period,
   quantity,
   reference,
+  SqlStore,
   string,
   token,
 } from '@fhirjs/sql';
+import type { SqbClient } from '@sqb/connect';
+import { addresses } from './addresses.js';
+import { Encounter } from './entities.js';
 import {
   ACT_CODE,
   CATEGORY,
+  diagnosisRows,
   ENCOUNTER_STATUS,
+  encounterColumns,
+  encounterOf,
+  encounterRow,
   GENDER,
   ICD10,
   LOINC,
   MRN,
   NATIONAL_ID,
-  UCUM,
-  diagnosisRows,
-  encounterColumns,
-  encounterOf,
-  encounterRow,
   observationColumns,
   observationOf,
   observationRow,
@@ -44,9 +45,8 @@ import {
   patientRow,
   telecomColumns,
   telecomRows,
+  UCUM,
 } from './mapping.js';
-import { addresses } from './addresses.js';
-import { Encounter } from './entities.js';
 
 export interface EmrStoreOptions {
   /** An sqb client of the EMR's database */

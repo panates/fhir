@@ -16,10 +16,7 @@ export type FhirTypeKind =
   | 'extension';
 
 export type FhirBindingStrength =
-  | 'required'
-  | 'extensible'
-  | 'preferred'
-  | 'example';
+  'required' | 'extensible' | 'preferred' | 'example';
 
 export interface FhirBindingOptions {
   strength: FhirBindingStrength;

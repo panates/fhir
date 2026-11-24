@@ -49,7 +49,10 @@ export class FhirPackageCache {
   constructor(options: FhirPackageCacheOptions = {}) {
     this.dir = options.dir ?? path.join(os.homedir(), '.fhir', 'packages');
     this.download = !!options.download;
-    this.registry = (options.registry ?? 'https://packages.fhir.org').replace(/\/$/, '');
+    this.registry = (options.registry ?? 'https://packages.fhir.org').replace(
+      /\/$/,
+      '',
+    );
     this._skip = options.skip ?? (name => NOT_NEEDED.test(name));
   }
 
@@ -60,7 +63,9 @@ export class FhirPackageCache {
 
   /** Whether the cache has a package */
   has(name: string, version: string): boolean {
-    return fs.existsSync(path.join(this.packageDir(name, version), 'package.json'));
+    return fs.existsSync(
+      path.join(this.packageDir(name, version), 'package.json'),
+    );
   }
 
   /** A package from the cache, downloaded first when missing and allowed */
@@ -102,19 +107,25 @@ export class FhirPackageCache {
     const versions = new Map<string, string>();
     const skipped = new Set<string>();
     const conflicts: string[] = [];
-    const visit = async (n: string, v: string, from?: string): Promise<void> => {
+    const visit = async (
+      n: string,
+      v: string,
+      from?: string,
+    ): Promise<void> => {
       if (this._skip(n)) {
         skipped.add(`${n}#${v}`);
         return;
       }
       const seen = versions.get(n);
       if (seen !== undefined) {
-        if (seen !== v) conflicts.push(`${n}: ${seen} is used, ${from ?? '?'} asks for ${v}`);
+        if (seen !== v)
+          conflicts.push(`${n}: ${seen} is used, ${from ?? '?'} asks for ${v}`);
         return;
       }
       versions.set(n, v);
       const pkg = await this.get(n, v);
-      for (const [dn, dv] of Object.entries(pkg.dependencies)) await visit(dn, dv, pkg.id);
+      for (const [dn, dv] of Object.entries(pkg.dependencies))
+        await visit(dn, dv, pkg.id);
       order.push(pkg);
     };
     await visit(name, version);
@@ -125,7 +136,8 @@ export class FhirPackageCache {
   private async _download(name: string, version: string): Promise<void> {
     const url = `${this.registry}/${encodeURIComponent(name)}/${encodeURIComponent(version)}`;
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`${name}#${version}: ${url} answered ${res.status}`);
+    if (!res.ok)
+      throw new Error(`${name}#${version}: ${url} answered ${res.status}`);
     const files = readTgz(new Uint8Array(await res.arrayBuffer()));
     if (!files.has('package/package.json'))
       throw new Error(`${name}#${version}: the download is not a FHIR package`);
@@ -141,7 +153,8 @@ export class FhirPackageCache {
         fs.writeFileSync(out, content);
       }
       fs.mkdirSync(this.dir, { recursive: true });
-      if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
+      if (fs.existsSync(target))
+        fs.rmSync(target, { recursive: true, force: true });
       fs.renameSync(temp, target);
     } finally {
       fs.rmSync(temp, { recursive: true, force: true });

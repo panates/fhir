@@ -8,14 +8,14 @@
 import { FhirContext } from '@fhirjs/core';
 import { r4Model } from '@fhirjs/r4';
 import {
-  type FhirStore,
   FhirServer,
+  type FhirStore,
   MemoryExportStorage,
   MemoryStore,
   RoutingStore,
   type SearchQuery,
-  type StorePage,
   type StoredResource,
+  type StorePage,
 } from '@fhirjs/server';
 import type { SqbClient } from '@sqb/connect';
 import { expect } from 'expect';
@@ -419,6 +419,7 @@ describe('examples/facade: writes to the EMR', function () {
     return `${r.status} ${r.body?.issue?.[0]?.diagnostics}`;
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const withoutMeta = ({ meta: _m, ...r }: Record<string, any>) => r;
 
   it('writes every row back as it is: the mapping back is the inverse of the mapping', async () => {

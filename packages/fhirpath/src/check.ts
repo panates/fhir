@@ -466,7 +466,7 @@ class Checker {
       )
         out.add(`System.${SYSTEM_TYPE_OF_PRIMITIVE[t]}`);
       else if (this.lenient) {
-        const c = this.model.allChildren(t).find(c => c.key === name);
+        const c = this.model.allChildren(t).find(x => x.key === name);
         if (c) out.add(c.type);
       }
       // an abstract type (Resource) may be any of its subtypes: not checked

@@ -5,15 +5,13 @@
  * care-team table, limited by `where`). Needs PostgreSQL: FHIR_PG_URL;
  * skipped without it.
  */
+import '@sqb/postgres';
 import { FhirContext } from '@fhirjs/core';
 import { r4Model } from '@fhirjs/r4';
 import { FhirServer } from '@fhirjs/server';
 import { SqbClient } from '@sqb/connect';
-import '@sqb/postgres';
 import { expect } from 'expect';
 import {
-  SqlStore,
-  type SqlTable,
   child,
   childTable,
   code,
@@ -22,6 +20,8 @@ import {
   number,
   quantity,
   reference,
+  SqlStore,
+  type SqlTable,
   string,
   token,
 } from '../src/index.js';

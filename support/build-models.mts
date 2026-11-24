@@ -18,7 +18,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
-import { PACKAGES, packageDir } from './fetch-packages.mts';
+import { packageDir, PACKAGES } from './fetch-packages.mts';
 
 const VERSION = (
   process.argv.find(a => a.startsWith('--version='))?.slice(10) || 'R4'
@@ -480,6 +480,45 @@ function constraintLit(c: NonNullable<ED['constraint']>[number]) {
   });
 }
 
+/** An import statement of a generated file */
+interface GenImport {
+  source: string;
+  names: Iterable<string>;
+  type?: boolean;
+}
+
+const collator = new Intl.Collator('en', {
+  sensitivity: 'base',
+  numeric: true,
+});
+const compare = (a: string, b: string) =>
+  collator.compare(a, b) || (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * The imports in the order eslint's simple-import-sort keeps them (the
+ * repository's lint): packages before relative paths, `../` before `./`, a
+ * type import before a value import of the same module.
+ */
+function importLines(imports: GenImport[]): string[] {
+  const key = (s: string) =>
+    s
+      .replace(/^[./]*\.$/, '$&/')
+      .replace(/^[./]*\/$/, '$&,')
+      .replace(/[./_-]/g, c => ({ '.': '_', '/': '-', _: '.', '-': '/' })[c]!);
+  return imports
+    .sort(
+      (a, b) =>
+        Number(a.source.startsWith('.')) - Number(b.source.startsWith('.')) ||
+        compare(key(a.source), key(b.source)) ||
+        compare(a.source, b.source) ||
+        Number(!a.type) - Number(!b.type),
+    )
+    .map(
+      i =>
+        `import ${i.type ? 'type ' : ''}{ ${[...i.names].sort(compare).join(', ')} } from '${i.source}';`,
+    );
+}
+
 function relImport(fromFile: string, toFile: string): string {
   let r = path.relative(path.dirname(fromFile), toFile);
   if (!r.startsWith('.')) r = './' + r;
@@ -656,32 +695,27 @@ for (const [file, list] of files) {
     body.push(lines.join(''));
   }
 
-  const imports: string[] = [];
-  if (coreValues.size)
-    imports.push(
-      `import { ${[...coreValues].sort().join(', ')} } from '${CORE}';`,
-    );
+  const imports: GenImport[] = [];
+  if (coreValues.size) imports.push({ source: CORE, names: coreValues });
   if (coreTypes.size)
-    imports.push(
-      `import type { ${[...coreTypes].sort().join(', ')} } from '${CORE}';`,
-    );
+    imports.push({ source: CORE, names: coreTypes, type: true });
   const target = path.join(outDir, file);
   for (const [f, names] of valueImports) {
-    imports.push(
-      `import { ${[...names].sort().join(', ')} } from '${relImport(target, path.join(outDir, f))}';`,
-    );
+    imports.push({ source: relImport(target, path.join(outDir, f)), names });
     const t = typeImports.get(f);
     if (t) for (const n of names) t.delete(n);
   }
   for (const [f, names] of typeImports)
     if (names.size)
-      imports.push(
-        `import type { ${[...names].sort().join(', ')} } from '${relImport(target, path.join(outDir, f))}';`,
-      );
+      imports.push({
+        source: relImport(target, path.join(outDir, f)),
+        names,
+        type: true,
+      });
 
   writeFileSync(
     target + '.ts',
-    HEADER + imports.join('\n') + '\n\n' + body.join('\n'),
+    HEADER + importLines(imports).join('\n') + '\n\n' + body.join('\n'),
   );
 }
 
@@ -782,7 +816,9 @@ const searchParamNotes: string[] = [];
   out.push(
     `export const ${VERSION}_COMPARTMENTS: Record<string, Record<string, string[]>> = {`,
   );
-  for (const cd of compartmentDefs.sort((a, b) => a.code.localeCompare(b.code))) {
+  for (const cd of compartmentDefs.sort((a, b) =>
+    a.code.localeCompare(b.code),
+  )) {
     const byType: Record<string, string[]> = {};
     for (const r of cd.resource ?? []) {
       // {def}: the compartment's own resource, by its id, which the model reads so anyway
@@ -800,25 +836,26 @@ const searchParamNotes: string[] = [];
   const sorted = [...files.keys()].sort();
   const all = [...selected].map(n => classes.get(n)!.className).sort();
   const out = [HEADER];
-  out.push(`import { FhirModel } from '${CORE}';`);
-  for (const f of sorted)
-    out.push(
-      `import { ${files
-        .get(f)!
-        .map(c => c.className)
-        .sort()
-        .join(', ')} } from './${f}.js';`,
-    );
+  out.push(
+    ...importLines([
+      { source: CORE, names: ['FhirModel'] },
+      ...sorted.map(f => ({
+        source: `./${f}.js`,
+        names: files.get(f)!.map(c => c.className),
+      })),
+      { source: './value-set-data.js', names: [`${VERSION}_VALUE_SETS`] },
+      {
+        source: './search-parameters.js',
+        names: [`${VERSION}_SEARCH_PARAMETERS`],
+      },
+      { source: './compartments.js', names: [`${VERSION}_COMPARTMENTS`] },
+    ]),
+  );
   out.push('');
   for (const f of sorted) out.push(`export * from './${f}.js';`);
   out.push(`export type * from './value-sets.js';`);
-  out.push(`import { ${VERSION}_VALUE_SETS } from './value-set-data.js';`);
   out.push(`export { ${VERSION}_VALUE_SETS };`);
-  out.push(
-    `import { ${VERSION}_SEARCH_PARAMETERS } from './search-parameters.js';`,
-  );
   out.push(`export { ${VERSION}_SEARCH_PARAMETERS };`);
-  out.push(`import { ${VERSION}_COMPARTMENTS } from './compartments.js';`);
   out.push(`export { ${VERSION}_COMPARTMENTS };\n`);
   out.push(
     `/** Every type of ${VERSION} */\nexport const ${VERSION}_TYPES: Function[] = [\n  ${all.join(',\n  ')},\n];\n`,

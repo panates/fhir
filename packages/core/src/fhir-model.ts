@@ -1,12 +1,15 @@
 import { getOwnTypeMetadata } from './decorators.js';
 import type { FhirPackage } from './package/fhir-package.js';
 import { ProfileBuilder } from './package/profile-builder.js';
-import { type FhirSearchParameter, searchParameterOf } from './search-parameter.js';
 import {
   codeSystemCodes,
   resolveValueSet,
   type ValueSetEntries,
 } from './package/value-set-resolver.js';
+import {
+  type FhirSearchParameter,
+  searchParameterOf,
+} from './search-parameter.js';
 import type {
   FhirBindingOptions,
   FhirBindingStrength,
@@ -174,14 +177,22 @@ export class FhirTypeInfo {
 
     const baseCtor = Object.getPrototypeOf(ctor);
     if (base) this.base = base;
-    else if (baseCtor && baseCtor !== Function.prototype && getOwnTypeMetadata(baseCtor)?.kind)
+    else if (
+      baseCtor &&
+      baseCtor !== Function.prototype &&
+      getOwnTypeMetadata(baseCtor)?.kind
+    )
       this.base = model.getType(baseCtor);
     if (isProfile) {
-      if (!this.base) throw new TypeError(`${this.name}: a profile must extend a FHIR type`);
+      if (!this.base)
+        throw new TypeError(`${this.name}: a profile must extend a FHIR type`);
       this.profileOf = this.base.profileOf || this.base;
       if (meta.kind === 'extension' && !this.profileOf.isA('Extension'))
-        throw new TypeError(`${this.name}: an extension definition must extend Extension`);
-      if (!this.url && !base) throw new TypeError(`${this.name}: a profile needs a url`);
+        throw new TypeError(
+          `${this.name}: an extension definition must extend Extension`,
+        );
+      if (!this.url && !base)
+        throw new TypeError(`${this.name}: a profile needs a url`);
     }
     if (this.base) {
       for (const [name, el] of this.base.elements) this.elements.set(name, el);
@@ -195,7 +206,8 @@ export class FhirTypeInfo {
     const elementOptions = { ...meta.elements };
     if (meta.kind === 'extension' && meta.value) {
       const valueType = model.resolveTypeName(meta.value.type);
-      const key = 'value' + valueType.charAt(0).toUpperCase() + valueType.slice(1);
+      const key =
+        'value' + valueType.charAt(0).toUpperCase() + valueType.slice(1);
       elementOptions[key] = {
         type: valueType,
         choice: 'value[x]',
@@ -212,7 +224,8 @@ export class FhirTypeInfo {
         if (own) this.keys.get(property)?.constraints.push(...own);
         continue;
       }
-      if (!options.type) throw new TypeError(`${this.name}.${property}: no type`);
+      if (!options.type)
+        throw new TypeError(`${this.name}.${property}: no type`);
       const name = options.choice || property;
       let el = this.elements.get(name);
       if (!el || el.owner !== this) {
@@ -232,27 +245,41 @@ export class FhirTypeInfo {
 
     for (const [property, options] of Object.entries(meta.extensions)) {
       if (this.keys.has(property))
-        throw new TypeError(`${this.name}.${property}: an extension property cannot have an element's name`);
+        throw new TypeError(
+          `${this.name}.${property}: an extension property cannot have an element's name`,
+        );
       let definition: FhirTypeInfo | undefined;
       let url = options.url;
-      let valueType = options.type ? model.resolveTypeName(options.type) : undefined;
+      let valueType = options.type
+        ? model.resolveTypeName(options.type)
+        : undefined;
       let binding = options.binding;
       if (options.extension) {
         definition = model.getType(options.extension());
         if (definition.kind !== 'extension')
-          throw new TypeError(`${this.name}.${property}: ${definition.name} is not an extension definition`);
+          throw new TypeError(
+            `${this.name}.${property}: ${definition.name} is not an extension definition`,
+          );
         url = definition.url;
         const value = definition.elements.get('value[x]');
-        const allowed = value && definition.elements.get('value[x]') !== definition.base?.elements.get('value[x]');
+        const allowed =
+          value &&
+          definition.elements.get('value[x]') !==
+            definition.base?.elements.get('value[x]');
         if (allowed && value!.types.length === 1) {
           valueType = value!.types[0].code;
           binding = binding || value!.binding;
         }
       }
-      if (!url) throw new TypeError(`${this.name}.${property}: an extension needs a url or a definition`);
+      if (!url)
+        throw new TypeError(
+          `${this.name}.${property}: an extension needs a url or a definition`,
+        );
       const complex = !!definition && !valueType;
       if (!complex && !valueType)
-        throw new TypeError(`${this.name}.${property}: an extension needs a value type`);
+        throw new TypeError(
+          `${this.name}.${property}: an extension needs a value type`,
+        );
       const max = maxOf(options.max);
       this.extensions.set(property, {
         property,
@@ -269,15 +296,28 @@ export class FhirTypeInfo {
     }
 
     for (const [property, options] of Object.entries(meta.slices)) {
-      if (!isProfile) throw new TypeError(`${this.name}.${property}: slices belong to profiles`);
+      if (!isProfile)
+        throw new TypeError(
+          `${this.name}.${property}: slices belong to profiles`,
+        );
       const element = this.elements.get(options.element);
-      if (!element) throw new TypeError(`${this.name}.${property}: no element "${options.element}" to slice`);
-      if (!element.isArray) throw new TypeError(`${this.name}.${property}: ${options.element} does not repeat`);
+      if (!element)
+        throw new TypeError(
+          `${this.name}.${property}: no element "${options.element}" to slice`,
+        );
+      if (!element.isArray)
+        throw new TypeError(
+          `${this.name}.${property}: ${options.element} does not repeat`,
+        );
       if (element.types.length !== 1)
-        throw new TypeError(`${this.name}.${property}: ${options.element} has more than one type`);
+        throw new TypeError(
+          `${this.name}.${property}: ${options.element} has more than one type`,
+        );
       const max = maxOf(options.max);
       if (max > element.max)
-        throw new TypeError(`${this.name}.${property}: slice max ${max} exceeds ${element.path} max ${element.max}`);
+        throw new TypeError(
+          `${this.name}.${property}: slice max ${max} exceeds ${element.path} max ${element.max}`,
+        );
       this.slices.set(property, {
         property,
         name: options.name,
@@ -299,15 +339,32 @@ export class FhirTypeInfo {
     // a choice narrowed by several keys: the later ones are gone from keys
     const base = this.keys.get(property) || this.base?.keys.get(property);
     const where = `${this.name}.${property}`;
-    if (!base) throw new TypeError(`${where}: a profile cannot add elements, only constrain them`);
+    if (!base)
+      throw new TypeError(
+        `${where}: a profile cannot add elements, only constrain them`,
+      );
     const min = options.min ?? base.min;
     const max = options.max === undefined ? base.max : maxOf(options.max);
-    if (min < base.min) throw new TypeError(`${where}: min ${min} is below the base's ${base.min}`);
-    if (max > base.max) throw new TypeError(`${where}: max ${max} is above the base's ${base.max}`);
-    if (min > max) throw new TypeError(`${where}: min ${min} is above max ${max}`);
+    if (min < base.min)
+      throw new TypeError(
+        `${where}: min ${min} is below the base's ${base.min}`,
+      );
+    if (max > base.max)
+      throw new TypeError(
+        `${where}: max ${max} is above the base's ${base.max}`,
+      );
+    if (min > max)
+      throw new TypeError(`${where}: min ${min} is above max ${max}`);
     const binding = options.binding ?? base.binding;
-    if (options.binding && base.binding && BINDING_RANK[options.binding.strength] < BINDING_RANK[base.binding.strength])
-      throw new TypeError(`${where}: binding ${options.binding.strength} is weaker than the base's ${base.binding.strength}`);
+    if (
+      options.binding &&
+      base.binding &&
+      BINDING_RANK[options.binding.strength] <
+        BINDING_RANK[base.binding.strength]
+    )
+      throw new TypeError(
+        `${where}: binding ${options.binding.strength} is weaker than the base's ${base.binding.strength}`,
+      );
 
     // Narrowing a choice: the types of the decorated keys only
     let types = base.types;
@@ -316,10 +373,13 @@ export class FhirTypeInfo {
       const t = base.types.find(x => x.key === property);
       // the base's type, or a profile of it
       if (!t || (t.code !== code && !this.model.getType(code).isA(t.code)))
-        throw new TypeError(`${where}: type ${code} is not a type of ${base.path}`);
+        throw new TypeError(
+          `${where}: type ${code} is not a type of ${base.path}`,
+        );
       const narrowed = t.code === code ? t : { ...t, code };
       const prev = this.elements.get(base.name);
-      types = prev && prev.owner === this ? [...prev.types, narrowed] : [narrowed];
+      types =
+        prev && prev.owner === this ? [...prev.types, narrowed] : [narrowed];
     }
 
     const el = new FhirElementInfo(this, base.name, {
@@ -396,7 +456,10 @@ export class FhirModel {
   private readonly _resolving = new Set<string>();
   private readonly _building = new Set<string>();
   /** Search parameters by base type, then by code */
-  private readonly _searchParams = new Map<string, Map<string, FhirSearchParameter>>();
+  private readonly _searchParams = new Map<
+    string,
+    Map<string, FhirSearchParameter>
+  >();
   /** Compartments: by compartment, by resource type, the parameters that put a resource in it */
   private _compartments: Record<string, Record<string, string[]>> = {};
   private _warnings: string[] = [];
@@ -416,7 +479,8 @@ export class FhirModel {
   ) {
     for (const ctor of classes) this.addClass(ctor);
     if (options?.valueSets) this.addValueSets(options.valueSets);
-    if (options?.searchParameters) this.addSearchParameters(options.searchParameters);
+    if (options?.searchParameters)
+      this.addSearchParameters(options.searchParameters);
     if (options?.compartments) this._compartments = options.compartments;
   }
 
@@ -426,7 +490,10 @@ export class FhirModel {
    * the type is not in the compartment. The compartment's own type is in it
    * by its id too (a Patient is in its own Patient compartment).
    */
-  compartmentParams(compartment: string, type: string): readonly string[] | undefined {
+  compartmentParams(
+    compartment: string,
+    type: string,
+  ): readonly string[] | undefined {
     return this._compartments[compartment]?.[type];
   }
 
@@ -454,13 +521,17 @@ export class FhirModel {
     if (!this.hasType(type)) return out;
     for (let t: FhirTypeInfo | undefined = this.getType(type); t; t = t.base) {
       const own = this._searchParams.get(t.name);
-      if (own) for (const [code, p] of own) if (!out.has(code)) out.set(code, p);
+      if (own)
+        for (const [code, p] of own) if (!out.has(code)) out.set(code, p);
     }
     return out;
   }
 
   /** A search parameter of a resource type by its code ('birthdate', '_id') */
-  getSearchParameter(type: string, code: string): FhirSearchParameter | undefined {
+  getSearchParameter(
+    type: string,
+    code: string,
+  ): FhirSearchParameter | undefined {
     return this.searchParameters(type).get(code);
   }
 
@@ -545,12 +616,16 @@ export class FhirModel {
    */
   extend(classes: Iterable<Function>): FhirModel {
     const model = new FhirModel(this.fhirVersion, this._ctors.values());
-    for (const [url, entries] of this._valueSetData) model._valueSetData.set(url, entries);
+    for (const [url, entries] of this._valueSetData)
+      model._valueSetData.set(url, entries);
     for (const [url, sd] of this._sds) model._sds.set(url, sd);
     model._sources = [...this._sources];
-    for (const [url, e] of this._vsFromPackages) model._vsFromPackages.set(url, e);
-    for (const [url, c] of this._csFromPackages) model._csFromPackages.set(url, c);
-    for (const [base, byCode] of this._searchParams) model._searchParams.set(base, new Map(byCode));
+    for (const [url, e] of this._vsFromPackages)
+      model._vsFromPackages.set(url, e);
+    for (const [url, c] of this._csFromPackages)
+      model._csFromPackages.set(url, c);
+    for (const [base, byCode] of this._searchParams)
+      model._searchParams.set(base, new Map(byCode));
     model._compartments = this._compartments;
     for (const ctor of classes) model.addClass(ctor);
     return model;
@@ -571,7 +646,9 @@ export class FhirModel {
     if (!sd || this._building.has(url)) return;
     this._building.add(url);
     try {
-      const built = new ProfileBuilder(this, sd, m => this._warnings.push(m)).build();
+      const built = new ProfileBuilder(this, sd, m =>
+        this._warnings.push(m),
+      ).build();
       return this._defs.get(built);
     } catch (e) {
       this._warnings.push(`${url}: ${(e as Error).message}`);
@@ -607,23 +684,34 @@ export class FhirModel {
     const prev = this._warnings;
     this._warnings = warnings;
     try {
-      if (pkg.fhirVersions.length && !pkg.fhirVersions.some(v => v.startsWith(this.fhirVersion.slice(0, 3))))
-        warnings.push(`${pkg.id} is for FHIR ${pkg.fhirVersions.join(', ')}, this model is ${this.fhirVersion}`);
+      if (
+        pkg.fhirVersions.length &&
+        !pkg.fhirVersions.some(v => v.startsWith(this.fhirVersion.slice(0, 3)))
+      )
+        warnings.push(
+          `${pkg.id} is for FHIR ${pkg.fhirVersions.join(', ')}, this model is ${this.fhirVersion}`,
+        );
       // value sets and code systems: read when a binding needs them
       this._sources.push(pkg);
       // a value set or code system of the package may be one not found before
-      for (const [url, e] of this._vsFromPackages) if (e === null) this._vsFromPackages.delete(url);
-      for (const [url, c] of this._csFromPackages) if (c === null) this._csFromPackages.delete(url);
+      for (const [url, e] of this._vsFromPackages)
+        if (e === null) this._vsFromPackages.delete(url);
+      for (const [url, c] of this._csFromPackages)
+        if (c === null) this._csFromPackages.delete(url);
       const urls: string[] = [];
       const bound = new Set<string>();
       for (const entry of pkg.entriesOf('StructureDefinition')) {
         // A type the model already has from its generated classes (the core
         // package's Patient, string ...): not read
-        if (entry.type && entry.id === entry.type && this.hasType(entry.type)) continue;
+        if (entry.type && entry.id === entry.type && this.hasType(entry.type))
+          continue;
         const sd = pkg.resourceOf(entry);
         if (!sd) continue;
         for (const ed of sd.snapshot?.element || [])
-          if (ed.binding?.strength === 'required' && typeof ed.binding.valueSet === 'string')
+          if (
+            ed.binding?.strength === 'required' &&
+            typeof ed.binding.valueSet === 'string'
+          )
             bound.add(ed.binding.valueSet.split('|')[0]);
         if (sd.derivation !== 'constraint' || !sd.url) continue;
         if (!sd.snapshot?.element?.length) {
@@ -654,7 +742,9 @@ export class FhirModel {
         if (!p) continue;
         const unknown = p.base.filter(b => !this.hasType(b));
         if (unknown.length) {
-          warnings.push(`${p.url}: unknown base ${unknown.join(', ')}, not loaded`);
+          warnings.push(
+            `${p.url}: unknown base ${unknown.join(', ')}, not loaded`,
+          );
           continue;
         }
         params.push(p);

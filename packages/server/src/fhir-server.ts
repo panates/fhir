@@ -20,13 +20,6 @@ import type {
   StoredVersion,
 } from './fhir-store.js';
 import { applyJsonPatch } from './json-patch.js';
-import type {
-  FhirAccessDecision,
-  FhirInteraction,
-  FhirPrincipal,
-  FhirRequestContext,
-  FhirSecurityOptions,
-} from './security.js';
 import { SearchMatcher } from './search-match.js';
 import {
   parseCriterion,
@@ -35,9 +28,16 @@ import {
   type SearchComponent,
   type SearchCriterion,
   type SearchQuery,
-  type SearchValue,
   type SearchSort,
+  type SearchValue,
 } from './search-query.js';
+import type {
+  FhirAccessDecision,
+  FhirInteraction,
+  FhirPrincipal,
+  FhirRequestContext,
+  FhirSecurityOptions,
+} from './security.js';
 import { exportSubset, subsetOf, subsetted } from './subset.js';
 
 /** A step around each exchange: (request, next) => response, as in the client */
@@ -655,15 +655,15 @@ export class FhirServer {
         path,
       );
     } catch (e) {
-      if (!(e instanceof FhirServerError)) {
-        this.options.onError?.(e, ctx.request);
-        e = new FhirServerError(
+      if (e instanceof FhirServerError) return outcomeResponse(e);
+      this.options.onError?.(e, ctx.request);
+      return outcomeResponse(
+        new FhirServerError(
           500,
           'The server could not answer the request',
           'exception',
-        );
-      }
-      return outcomeResponse(e as FhirServerError);
+        ),
+      );
     }
   }
 
@@ -779,6 +779,7 @@ export class FhirServer {
   ): Promise<Response> {
     const store = need(served, 'create', type);
     await this._authorize(ctx, 'create', type);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { id: _ignored, ...resource } = await this._body(ctx, type);
     await this._guardWrite(ctx, 'create', type, undefined, resource, served);
     // If-None-Exist: create only when the criteria find nothing

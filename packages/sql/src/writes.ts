@@ -2,8 +2,8 @@
  * What writes need besides SQL: helpers for a table's `row()`, and the
  * check that a written resource reads back with every element it was given.
  */
-import type { Repository } from '@sqb/connect';
 import { FhirServerError } from '@fhirjs/server';
+import type { Repository } from '@sqb/connect';
 
 /** Runs SQL on the connection of the read or write: inside a write's transaction */
 export interface SqlRunner {
@@ -90,6 +90,7 @@ export function lostElements(
   const { meta, ...rest } = written;
   const w: Record<string, any> = rest;
   if (meta) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { versionId: _v, lastUpdated: _l, ...others } = meta;
     if (Object.keys(others).length) w.meta = others;
   }

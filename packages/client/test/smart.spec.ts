@@ -8,8 +8,8 @@ import {
   SmartAppLaunch,
   SmartAuthError,
   SmartBackendServices,
-  verifyIdToken,
   type SmartConfiguration,
+  verifyIdToken,
 } from '../src/index.js';
 import { SmartTestServer } from './_support/smart-test-server.js';
 import { TestFhirServer } from './_support/test-server.js';

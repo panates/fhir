@@ -5,20 +5,20 @@
  * (If-Match), one without has none, one without row() is read-only. Needs
  * PostgreSQL: FHIR_PG_URL; skipped without it.
  */
+import '@sqb/postgres';
 import { FhirContext } from '@fhirjs/core';
 import { r4Model } from '@fhirjs/r4';
 import { FhirServer, FhirServerError } from '@fhirjs/server';
 import { SqbClient } from '@sqb/connect';
-import '@sqb/postgres';
 import { expect } from 'expect';
 import {
-  SqlStore,
   code,
   decimalValue,
   lostElements,
   onlyElements,
   reference,
   referenceId,
+  SqlStore,
   string,
   token,
 } from '../src/index.js';

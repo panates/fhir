@@ -1,0 +1,19 @@
+extends: '@panates/rman-preset'
+
+# Install, sync the lockfile and publish with pnpm.
+packageManager:
+  node: pnpm
+
+# All packages release together, under one version and one `v*` tag.
+group: true
+
+version:
+  # Bump every package in the group, not only the ones that changed.
+  cascade: group
+  # Every release is a beta (1.0.0-beta.0, 1.0.0-beta.1, ...) and goes to npm under the `beta`
+  # dist-tag. Remove this line for 1.0.0: the next release is then 1.0.0, on `latest`.
+  preid: beta
+
+changelog:
+  # One changelog for the whole release, at the repository root.
+  groupBy: group

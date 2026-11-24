@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fhirPathModelOf } from '@fhirjs/core';
-import { expect } from 'expect';
 import { type FhirModel, parseFhirJson } from '@fhirjs/core';
 import {
   decimalText,
@@ -10,6 +9,7 @@ import {
   FpTemporal,
   type Item,
 } from '@fhirjs/fhirpath';
+import { expect } from 'expect';
 import { fhirXmlToJson } from './fhir-xml.js';
 
 /*

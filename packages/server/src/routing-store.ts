@@ -3,9 +3,9 @@ import type {
   FhirStore,
   HistoryQuery,
   StoreCapabilities,
-  StorePage,
   StoredResource,
   StoredVersion,
+  StorePage,
 } from './fhir-store.js';
 import type { SearchQuery } from './search-query.js';
 import type { FhirRequestContext } from './security.js';

@@ -5,21 +5,21 @@
  * are rolled back: the Repository runs on the write's connection), and the
  * links it refuses. Needs PostgreSQL: FHIR_PG_URL; skipped without it.
  */
+import '@sqb/postgres';
 import { FhirContext } from '@fhirjs/core';
 import { r4Model } from '@fhirjs/r4';
 import { FhirServer } from '@fhirjs/server';
 import { DataType, Eq } from '@sqb/builder';
 import { Column, Entity, Link, PrimaryKey, SqbClient } from '@sqb/connect';
-import '@sqb/postgres';
 import { expect } from 'expect';
 import {
-  SqlStore,
-  type SqlTable,
   child,
   code,
   linked,
   onlyElements,
   reference,
+  SqlStore,
+  type SqlTable,
   string,
   token,
 } from '../src/index.js';
@@ -272,8 +272,8 @@ describe('SqlStore linked children (sqb entities)', function () {
   const contacts = (id: string) =>
     rows(`select contact_no::int as no, medium, val, pos, checked
             from contacts where owner_ref = ${id} order by pos`);
-  const language = (code: string) => ({
-    language: { coding: [{ system: LANGUAGE, code }] },
+  const language = (tag: string) => ({
+    language: { coding: [{ system: LANGUAGE, code: tag }] },
   });
 
   it('reads, writes by key and without, and searches the rows of a link', async () => {

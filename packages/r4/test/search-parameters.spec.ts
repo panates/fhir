@@ -1,6 +1,6 @@
-import { describeSearchParameters } from '../../core/test/_support/search-parameters.js';
 import { FhirContext, FhirPackage, FhirProfile } from '@fhirjs/core';
 import { expect } from 'expect';
+import { describeSearchParameters } from '../../core/test/_support/search-parameters.js';
 import { Patient, R4_SEARCH_PARAMETERS, r4Model } from '../src/index.js';
 import { hasPackage, R4_CORE, US_CORE } from './_support/packages.js';
 

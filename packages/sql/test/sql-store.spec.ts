@@ -6,24 +6,23 @@
  * over the same resources matched by FHIRPath must find the same resources,
  * in the same order. Needs PostgreSQL: FHIR_PG_URL; skipped without it.
  */
+import '@sqb/postgres';
 import { FhirContext } from '@fhirjs/core';
 import { r4Model } from '@fhirjs/r4';
 import {
-  type FhirStore,
   FhirServer,
+  type FhirStore,
   type SearchQuery,
-  type StorePage,
   type StoredResource,
+  type StorePage,
 } from '@fhirjs/server';
 import { Eq, IsNot, Not, Or, Raw } from '@sqb/builder';
 import { SqbClient } from '@sqb/connect';
-import '@sqb/postgres';
 import { expect } from 'expect';
 import {
-  type Cond,
-  SqlStore,
   code,
   composite,
+  type Cond,
   constant,
   date,
   day,
@@ -31,6 +30,7 @@ import {
   number,
   quantity,
   reference,
+  SqlStore,
   string,
   token,
 } from '../src/index.js';

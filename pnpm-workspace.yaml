@@ -1,9 +1,12 @@
 packages:
-  - 'packages/*'
+  - packages/*
 
-linkWorkspacePackages: true
+# pnpm holds back any version younger than a day by default. Our own packages are released
+# and used by other repositories on the same day, so this repository takes them at once.
 minimumReleaseAge: 0
 
-# Install scripts pnpm may run: native binaries for the tests.
+# Packages with an install script: true lets pnpm run it, false blocks it. The compiler the tests
+# run on and eslint's module resolver are listed in every repository; the value is the repository's.
 allowBuilds:
   '@swc/core': true
+  unrs-resolver: true

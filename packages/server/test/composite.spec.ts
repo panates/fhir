@@ -2,7 +2,7 @@ import { FhirContext } from '@fhirjs/core';
 import { r4Model } from '@fhirjs/r4';
 import { r5Model } from '@fhirjs/r5';
 import { expect } from 'expect';
-import { type FhirStore, FhirServer, MemoryStore } from '../src/index.js';
+import { FhirServer, type FhirStore, MemoryStore } from '../src/index.js';
 
 const fhir = new FhirContext(r4Model);
 const LOINC = 'http://loinc.org';

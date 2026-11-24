@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { expect } from 'expect';
 import { FhirCodecError, FhirContext, FhirPackage } from '@fhirjs/core';
+import { expect } from 'expect';
 import {
   hasPackage,
   packagePath,

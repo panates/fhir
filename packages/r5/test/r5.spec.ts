@@ -1,5 +1,5 @@
-import { expect } from 'expect';
 import { FhirCodecError, FhirContext } from '@fhirjs/core';
+import { expect } from 'expect';
 import {
   compareWithSnapshots,
   decimalPrecision,
@@ -7,7 +7,12 @@ import {
   packagePath,
   roundTripExamples,
 } from '../../core/test/_support/conformance.js';
-import { CodeableReference, Observation, Patient, r5Model } from '../src/index.js';
+import {
+  CodeableReference,
+  Observation,
+  Patient,
+  r5Model,
+} from '../src/index.js';
 
 const R5_CORE = packagePath('hl7.fhir.r5.core#5.0.0');
 const R5_EXAMPLES = packagePath('hl7.fhir.r5.examples#5.0.0');
@@ -26,14 +31,17 @@ describe('R5', () => {
       expect(r5Model.getType('Patient').isA('Base')).toBe(true);
       expect(r5Model.getType('HumanName').base?.name).toBe('DataType');
       expect(r5Model.getType('Timing').base?.name).toBe('BackboneType');
-      expect(r5Model.getType('Timing').getElement('modifierExtension')).toBeDefined();
+      expect(
+        r5Model.getType('Timing').getElement('modifierExtension'),
+      ).toBeDefined();
     });
 
     it('matches the snapshots of hl7.fhir.r5.core, element by element', function () {
       if (!hasPackage(R5_CORE)) return this.skip();
       // The core package disagrees with itself on X.id: Element says string,
       // the snapshots of the data types say id. The model keeps Element's.
-      const known = (path: string, what: string) => what === 'types' && path.endsWith('.id');
+      const known = (path: string, what: string) =>
+        what === 'types' && path.endsWith('.id');
       const { checked, errors } = compareWithSnapshots(r5Model, R5_CORE, known);
       expect(errors).toEqual([]);
       expect(checked).toBe(9261);
@@ -44,9 +52,17 @@ describe('R5', () => {
     it('reads integer64 as a JSON string (a number would lose digits)', () => {
       const t = r5Model.getType('integer64');
       expect(t.json).toBe('string');
-      const json = { resourceType: 'Patient', extension: [{ url: 'http://x', valueInteger64: '9007199254740993' }] };
-      expect(fhir.decode<Patient>(json).extension![0].valueInteger64).toBe('9007199254740993');
-      const bad = { resourceType: 'Patient', extension: [{ url: 'http://x', valueInteger64: 12 }] };
+      const json = {
+        resourceType: 'Patient',
+        extension: [{ url: 'http://x', valueInteger64: '9007199254740993' }],
+      };
+      expect(fhir.decode<Patient>(json).extension![0].valueInteger64).toBe(
+        '9007199254740993',
+      );
+      const bad = {
+        resourceType: 'Patient',
+        extension: [{ url: 'http://x', valueInteger64: 12 }],
+      };
       try {
         fhir.decode(bad);
         throw new Error('Expected a FhirCodecError');
@@ -63,7 +79,9 @@ describe('R5', () => {
         resourceType: 'Observation',
         status: 'final',
         code: { text: 'x' },
-        triggeredBy: [{ observation: { reference: 'Observation/1' }, type: 'reflex' }],
+        triggeredBy: [
+          { observation: { reference: 'Observation/1' }, type: 'reflex' },
+        ],
         bodyStructure: { reference: 'BodyStructure/1' },
       });
       expect(obs).toBeInstanceOf(Observation);
@@ -71,7 +89,9 @@ describe('R5', () => {
     });
 
     it('checks R5 required bindings', () => {
-      expect(() => fhir.decode({ resourceType: 'Patient', gender: 'femal' })).toThrow(
+      expect(() =>
+        fhir.decode({ resourceType: 'Patient', gender: 'femal' }),
+      ).toThrow(
         /"femal" is not in the value set http:\/\/hl7.org\/fhir\/ValueSet\/administrative-gender/,
       );
     });

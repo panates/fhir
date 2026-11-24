@@ -1,6 +1,18 @@
 {
   "extends": "../../tsconfig-base.json",
   "include": ["src"],
-  "references": [{ "path": "../server" }],
-  "compilerOptions": { "rootDir": "src", "outDir": "./build", "noEmit": false }
+  "exclude": ["build"],
+  "references": [
+    {
+      "path": "../server"
+    }
+  ],
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "./build",
+    "noEmit": false,
+    "paths": {
+      "@fhirjs/server": ["../server/src/index.js"]
+    }
+  }
 }

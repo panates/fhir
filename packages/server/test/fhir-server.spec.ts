@@ -6,8 +6,8 @@ import { Observation, Patient, r4Model } from '@fhirjs/r4';
 import { expect } from 'expect';
 import {
   FhirServer,
-  type FhirServerOptions,
   FhirServerError,
+  type FhirServerOptions,
   type FhirStore,
   MemoryStore,
   nodeListener,

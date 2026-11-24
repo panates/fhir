@@ -1,5 +1,15 @@
 {
-  "references": [{ "path": "./packages/fhirpath" }, { "path": "./packages/core" }, { "path": "./packages/r4" }, { "path": "./packages/r4b" }, { "path": "./packages/r5" }, { "path": "./packages/client" }, { "path": "./packages/server" }, { "path": "./packages/smart" }, { "path": "./packages/sql" }],
+  "references": [
+    { "path": "./packages/fhirpath" },
+    { "path": "./packages/core" },
+    { "path": "./packages/r4" },
+    { "path": "./packages/r4b" },
+    { "path": "./packages/r5" },
+    { "path": "./packages/client" },
+    { "path": "./packages/server" },
+    { "path": "./packages/smart" },
+    { "path": "./packages/sql" }
+  ],
   "files": [],
   "compilerOptions": { "noEmit": true }
 }

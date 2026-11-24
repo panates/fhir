@@ -140,10 +140,9 @@ function fill(model: FhirModel, type: FhirTypeInfo, node: XmlNode, json: any) {
       if (target.json === 'number')
         nodes.forEach((n, i) => {
           const text = n.attrs.value;
-          if (text !== undefined && String(Number(text)) !== text)
-            el.isArray
-              ? markDecimalText(values, i, text)
-              : markDecimalText(json, key, text);
+          if (text === undefined || String(Number(text)) === text) return;
+          if (el.isArray) markDecimalText(values, i, text);
+          else markDecimalText(json, key, text);
         });
     }
     if (exts.some(x => x !== null))

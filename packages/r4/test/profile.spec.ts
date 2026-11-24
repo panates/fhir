@@ -1,4 +1,3 @@
-import { expect } from 'expect';
 import {
   FhirCodecError,
   FhirContext,
@@ -8,6 +7,7 @@ import {
   FhirSlice,
   getDecimalText,
 } from '@fhirjs/core';
+import { expect } from 'expect';
 import { Patient, r4Model } from '../src/index.js';
 import {
   NationalityExtension,

@@ -1,6 +1,6 @@
 /** The EMR's database: a schema of its own, made and seeded, for the tests */
-import { readFileSync } from 'node:fs';
 import '@sqb/postgres';
+import { readFileSync } from 'node:fs';
 import { Insert } from '@sqb/builder';
 import { SqbClient } from '@sqb/connect';
 import { seedRows } from './seed.js';

@@ -280,6 +280,7 @@ export class MemoryStore implements FhirStore {
     const lastUpdated = new Date(time).toISOString();
     const v: Version = { type, id, versionId, lastUpdated, method };
     if (resource) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { resourceType: _r, id: _i, meta, ...rest } = resource;
       v.text = JSON.stringify({
         resourceType: type,

@@ -1,5 +1,5 @@
-import { expect } from 'expect';
 import { FhirContext } from '@fhirjs/core';
+import { expect } from 'expect';
 import {
   compareWithSnapshots,
   decimalPrecision,
