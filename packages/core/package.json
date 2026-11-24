@@ -22,7 +22,7 @@
     "fhir-r4b",
     "fhir-r5"
   ],
-  "version": "0.0.0",
+  "version": "1.0.0-beta.1",
   "private": true,
   "license": "BSD-3-Clause",
   "type": "module",
