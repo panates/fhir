@@ -1,6 +1,24 @@
 {
   "name": "@fhirjs/smart",
   "description": "SMART on FHIR building blocks: JWT verification with JWK Sets, and SMART scopes",
+  "keywords": [
+    "fhir",
+    "hl7",
+    "hl7-fhir",
+    "healthcare",
+    "health",
+    "medical",
+    "interoperability",
+    "typescript",
+    "smart-on-fhir",
+    "smart",
+    "jwt",
+    "jwks",
+    "jose",
+    "oauth2",
+    "scopes",
+    "authorization"
+  ],
   "version": "0.0.0",
   "private": true,
   "license": "BSD-3-Clause",
@@ -20,7 +38,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/panates/fhir.git",
+    "url": "git+https://github.com/panates/fhirjs.git",
     "directory": "packages/smart"
   },
   "publishConfig": {

@@ -1,6 +1,24 @@
 {
   "name": "@fhirjs/sql",
   "description": "A FHIR store over an existing SQL database, described table by table, on sqb",
+  "keywords": [
+    "fhir",
+    "hl7",
+    "hl7-fhir",
+    "healthcare",
+    "health",
+    "medical",
+    "interoperability",
+    "typescript",
+    "fhir-server",
+    "sql",
+    "postgresql",
+    "postgres",
+    "database",
+    "facade",
+    "sqb",
+    "emr"
+  ],
   "version": "0.0.0",
   "private": true,
   "license": "BSD-3-Clause",
@@ -31,7 +49,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/panates/fhir.git",
+    "url": "git+https://github.com/panates/fhirjs.git",
     "directory": "packages/sql"
   },
   "publishConfig": {

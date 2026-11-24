@@ -53,7 +53,7 @@ grantingScopes(scopes, 'c', 'Observation')[0].query; // 'category=laboratory'
 
 ## Documentation
 
-[The design of authentication and authorization](https://github.com/panates/fhir/blob/main/docs/decisions/server-auth.md)
+[The design of authentication and authorization](https://github.com/panates/fhirjs/blob/main/docs/decisions/server-auth.md)
 
 ## License
 

@@ -1,6 +1,22 @@
 {
   "name": "@fhirjs/fhirpath",
   "description": "FHIRPath for NodeJS: a parser and an evaluator compiled to functions, over a FHIR model of your own",
+  "keywords": [
+    "fhir",
+    "hl7",
+    "hl7-fhir",
+    "healthcare",
+    "health",
+    "medical",
+    "interoperability",
+    "typescript",
+    "fhirpath",
+    "fhirpath-engine",
+    "expression",
+    "parser",
+    "evaluator",
+    "query"
+  ],
   "version": "0.0.0",
   "private": true,
   "license": "BSD-3-Clause",
@@ -20,7 +36,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/panates/fhir.git",
+    "url": "git+https://github.com/panates/fhirjs.git",
     "directory": "packages/fhirpath"
   },
   "publishConfig": {

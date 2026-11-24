@@ -59,11 +59,11 @@ const fhir = new FhirContext(r4Model, { packages });
 A profile is a subclass of a generated class with `@FhirProfile`, `@FhirSlice` and
 `@FhirExtension`. Pass it in `types` and `decode()` picks it from `meta.profile`. A complete
 example is in
-[`examples/profile`](https://github.com/panates/fhir/tree/main/examples/profile).
+[`examples/profile`](https://github.com/panates/fhirjs/tree/main/examples/profile).
 
 ## Documentation
 
-[The design of the model](https://github.com/panates/fhir/blob/main/docs/design/decorator-model.md)
+[The design of the model](https://github.com/panates/fhirjs/blob/main/docs/design/decorator-model.md)
 
 ## License
 

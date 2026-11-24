@@ -1,6 +1,22 @@
 {
   "name": "@fhirjs/r5",
   "description": "FHIR R5 (5.0.0) resources and data types as decorated classes, for @fhirjs/core",
+  "keywords": [
+    "fhir",
+    "hl7",
+    "hl7-fhir",
+    "healthcare",
+    "health",
+    "medical",
+    "interoperability",
+    "typescript",
+    "fhir-r5",
+    "r5",
+    "fhir-5.0.0",
+    "fhir-resources",
+    "fhir-model",
+    "data-types"
+  ],
   "version": "0.0.0",
   "private": true,
   "license": "BSD-3-Clause",
@@ -21,7 +37,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/panates/fhir.git",
+    "url": "git+https://github.com/panates/fhirjs.git",
     "directory": "packages/r5"
   },
   "publishConfig": {

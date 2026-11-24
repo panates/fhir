@@ -1,4 +1,4 @@
-# fhir
+# fhirjs
 
 FHIR for Node.js: resources as typed classes, a JSON codec with validation, profiles and IG
 packages, FHIRPath, and a REST client with SMART on FHIR.
@@ -47,7 +47,7 @@ The classes use legacy decorators: set `"experimentalDecorators": true` in your 
 ## Documentation
 
 The design of the model and the measured results are in
-[`docs/design/decorator-model.md`](https://github.com/panates/fhir/blob/main/docs/design/decorator-model.md).
+[`docs/design/decorator-model.md`](https://github.com/panates/fhirjs/blob/main/docs/design/decorator-model.md).
 A profile with a slice and extensions is in [`examples/profile`](examples/profile).
 
 ## Node.js
@@ -63,5 +63,5 @@ repository.
 
 BSD-3-Clause
 
-[ci-badge]: https://github.com/panates/fhir/actions/workflows/test.yml/badge.svg?branch=dev
-[ci-url]: https://github.com/panates/fhir/actions/workflows/test.yml
+[ci-badge]: https://github.com/panates/fhirjs/actions/workflows/test.yml/badge.svg?branch=dev
+[ci-url]: https://github.com/panates/fhirjs/actions/workflows/test.yml
