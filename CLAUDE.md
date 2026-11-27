@@ -5,8 +5,9 @@ validation, profiles and IG packages, a FHIRPath engine of its own, and a REST c
 on FHIR. The packages are published under the `@fhirjs` scope (not yet published).
 
 The design and every measured result are in
-[`docs/design/decorator-model.md`](docs/design/decorator-model.md) (sections 11–13). The state of
-the work and what is open are in [`docs/HANDOVER.md`](docs/HANDOVER.md).
+[`docs/design/decorator-model.md`](docs/design/decorator-model.md) (sections 11–13), the
+decisions of the later packages in [`docs/decisions/`](docs/decisions). Open work is in the
+GitHub issues (label `enhancement`).
 A handoff note between sessions goes to `.claude/local/handoff.md` (git-ignored); a new session
 reads it first.
 

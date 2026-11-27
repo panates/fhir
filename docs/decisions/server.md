@@ -1,15 +1,15 @@
 # `@fhirjs/server`
 
-The design of the FHIR server package, before any code. The decisions in the two "Decided"
-sections were taken with the user (2026-11-21 and 2026-11-22); the rest is the proposal they lead
-to, open to change until it is built.
+The design of the FHIR server package, before any code. The decisions in the "Decided" sections
+were taken with the user (2026-11-21 to 2026-11-23); the rest is the proposal they lead to, open
+to change until it is built.
 
 ## Decided (2026-11-21)
 
 | Question | Decision | Why |
 | -------- | -------- | --- |
 | HTTP layer | A framework-free handler, `(request: Request) => Promise<Response>`, with thin adapters (`node:http`, Express; NestJS later) | FHIR's REST interface is fixed by the specification: its URLs, search parameters, `Bundle` and `OperationOutcome`. opra has REST rules of its own, which FHIR's would have to be bent into. The client already works on fetch's `Request` and `Response`, so both share one model, and interceptors have the same shape on both sides. |
-| Storage | A store interface, and an in-memory store in the package. The server parses search parameters; the store answers them. Stores for Postgres and MongoDB come later, as packages of their own. *Not built: the aim is a facade over existing systems (2026-11-23), see `HANDOVER.md`* | The in-memory store makes the server usable and testable on day one. A database store can translate a parsed query to its own language, which a FHIRPath-only design would not allow. |
+| Storage | A store interface, and an in-memory store in the package. The server parses search parameters; the store answers them. Stores for Postgres and MongoDB come later, as packages of their own. *Not built: the aim is a facade over existing systems, see "Decided (2026-11-23)"* | The in-memory store makes the server usable and testable on day one. A database store can translate a parsed query to its own language, which a FHIRPath-only design would not allow. |
 | First version | The core of the REST API: `capabilities`, `read`, `vread`, `create`, `update`, `delete`, `history`, search with the common parameter types and paging, conditional create, update and delete, JSON Patch, validation on write, `$validate` | These are what a client of a FHIR server expects. Batch and transaction need atomic stores, and `_include` and chained search need a store interface that has proven itself first. |
 | Authorization | Second step. The first version leaves an interceptor point | Token checks (JWKS) and SMART v2 scopes (`patient/Observation.rs`) come in one piece later, with tests from the client's SMART work. |
 
@@ -49,6 +49,13 @@ database instead.
 | Chains across stores | `StoreCapabilities.chains` may be a function of the target type; `RoutingStore` declares chains only to the types of the same store | A per-type boolean cannot say "to these types only"; a SQL store that joins some tables only needs the same. |
 | Transactions across stores | `RoutingStore` runs a transaction in its default store; types in other stores are read in it and not written (400) | Nothing can make two stores atomic together. Reads of a facade (a conditional reference to a patient in the existing database) are still useful. |
 | History of the server | Answered when the store has `history()` and every type declares history; `RoutingStore` merges its stores' histories, newest first | It gives the whole history where each store keeps one; a page costs the stores `offset + count` versions each. |
+
+## Decided (2026-11-23): a facade over existing systems
+
+The library's aim is a FHIR facade over systems that keep their own data (an EMR's database, a
+LIS), not a FHIR database. So a FHIR-shaped PostgreSQL or MongoDB store is not built:
+`MemoryStore` serves tests and demos, and stores over existing databases are described with
+`@fhirjs/sql` ([`sql-facade.md`](sql-facade.md), [`facade-store.md`](facade-store.md)).
 
 ## Shape
 
