@@ -3,11 +3,14 @@
 FHIR for Node.js: resources as typed classes, a JSON codec with validation, profiles and IG
 packages, FHIRPath, and a REST client with SMART on FHIR.
 
-[![Test][ci-badge]][ci-url]
+[![NPM Version][npm-image]][npm-url]
+[![NPM Downloads][downloads-image]][downloads-url]
+[![CI Tests][ci-test-image]][ci-test-url]
+[![Test Coverage][coveralls-image]][coveralls-url]
 
 The resources of each FHIR version are generated as decorated TypeScript classes. The same
 classes carry what the codec needs to read, write and validate them, so a profile is a subclass
-with a few more decorators. The packages are not published to npm yet.
+with a few more decorators. The packages are published to npm as betas of 1.0.0.
 
 ## Packages
 
@@ -63,5 +66,11 @@ repository.
 
 BSD-3-Clause
 
-[ci-badge]: https://github.com/panates/fhirjs/actions/workflows/test.yml/badge.svg?branch=dev
-[ci-url]: https://github.com/panates/fhirjs/actions/workflows/test.yml
+[npm-image]: https://img.shields.io/npm/v/@fhirjs/core
+[npm-url]: https://npmjs.org/package/@fhirjs/core
+[downloads-image]: https://img.shields.io/npm/dm/@fhirjs/core.svg
+[downloads-url]: https://npmjs.org/package/@fhirjs/core
+[ci-test-image]: https://github.com/panates/fhirjs/actions/workflows/test.yml/badge.svg?branch=dev
+[ci-test-url]: https://github.com/panates/fhirjs/actions/workflows/test.yml
+[coveralls-image]: https://img.shields.io/coveralls/panates/fhirjs/main.svg
+[coveralls-url]: https://coveralls.io/r/panates/fhirjs

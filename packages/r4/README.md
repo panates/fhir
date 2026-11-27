@@ -2,6 +2,11 @@
 
 FHIR R4 (4.0.1) resources and data types as decorated classes, for `@fhirjs/core`.
 
+[![NPM Version][npm-image]][npm-url]
+[![NPM Downloads][downloads-image]][downloads-url]
+[![CI Tests][ci-test-image]][ci-test-url]
+[![Test Coverage][coveralls-image]][coveralls-url]
+
 Every resource, data type and backbone element of FHIR 4.0.1 is a class, generated from the
 `hl7.fhir.r4.core` package. The codes of required value sets are typed. `r4Model` holds them
 all, for [`@fhirjs/core`](https://www.npmjs.com/package/@fhirjs/core) to read, write and
@@ -38,3 +43,12 @@ To add a profile, extend a class here with the decorators of `@fhirjs/core`; see
 ## License
 
 BSD-3-Clause
+
+[npm-image]: https://img.shields.io/npm/v/@fhirjs/r4
+[npm-url]: https://npmjs.org/package/@fhirjs/r4
+[downloads-image]: https://img.shields.io/npm/dm/@fhirjs/r4.svg
+[downloads-url]: https://npmjs.org/package/@fhirjs/r4
+[ci-test-image]: https://github.com/panates/fhirjs/actions/workflows/test.yml/badge.svg?branch=dev
+[ci-test-url]: https://github.com/panates/fhirjs/actions/workflows/test.yml
+[coveralls-image]: https://img.shields.io/coveralls/panates/fhirjs/main.svg
+[coveralls-url]: https://coveralls.io/r/panates/fhirjs

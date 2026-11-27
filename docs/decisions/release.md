@@ -54,6 +54,9 @@ In throwaway worktrees, with nothing pushed:
   (`npm dist-tag add`), and the `beta` and `placeholder` dist-tags were removed
   (`npm dist-tag rm`). Each of these takes the user's npm 2FA, one approval per package and tag.
 
-## Open
+## Coverage
 
-- The npm badges of the package READMEs.
+`release.yml` sends the coverage of the released code to Coveralls under `main`
+(`coverage-publish.yaml@v3`): the `coverage/lcov.info` that `test.yml` keeps as an artifact, from
+`dev`'s run of the merged commit. It covers the tests not tagged `#slow`, which run with c8. The
+READMEs show the npm version, downloads, the `test.yml` result on `dev` and this coverage.
