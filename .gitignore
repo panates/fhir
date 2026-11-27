@@ -39,6 +39,7 @@ lerna-debug.log*
 # Claude Code: .claude/settings.json is shared and committed, these are local
 .claude/settings.local.json
 .claude/worktrees/
+.claude/local/
 graphify-out
 
 # IDEs and editors
