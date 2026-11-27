@@ -24,6 +24,7 @@ with a few more decorators. The packages are published to npm as betas of 1.0.0.
 | [`@fhirjs/client`](packages/client) | A REST client with search paging, conditional interactions and SMART on FHIR |
 | [`@fhirjs/server`](packages/server) | A REST server over stores of your own: in memory, or a facade over an existing database |
 | [`@fhirjs/smart`](packages/smart) | SMART on FHIR building blocks: JWT verification with JWK Sets, and SMART scopes |
+| [`@fhirjs/sql`](packages/sql) | A store for `@fhirjs/server` over an existing SQL database (PostgreSQL), described table by table |
 
 ## Quick start
 
@@ -50,8 +51,12 @@ The classes use legacy decorators: set `"experimentalDecorators": true` in your 
 ## Documentation
 
 The design of the model and the measured results are in
-[`docs/design/decorator-model.md`](https://github.com/panates/fhirjs/blob/main/docs/design/decorator-model.md).
-A profile with a slice and extensions is in [`examples/profile`](examples/profile).
+[`docs/design/decorator-model.md`](https://github.com/panates/fhirjs/blob/main/docs/design/decorator-model.md),
+and the decisions behind the server, SMART, the SQL facade, Bulk Data and the releases in
+[`docs/decisions`](https://github.com/panates/fhirjs/tree/main/docs/decisions).
+A profile with a slice and extensions is in [`examples/profile`](examples/profile), and a facade
+over an EMR's PostgreSQL database in [`examples/facade`](examples/facade). Planned work is in the
+[issues](https://github.com/panates/fhirjs/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement).
 
 ## Node.js
 
