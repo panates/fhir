@@ -94,6 +94,13 @@ jobs:
       - name: Run unit tests
         run: pnpm exec c8 mocha --grep '#slow' --invert
 
+      # release.yml sends this report to Coveralls under the release commit on main
+      - name: Keep the coverage report for the release
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage/lcov.info
+
   # The tests tagged #slow, in parallel with the others: every example of every version, and
   # every R4 invariant against fhirpath.js. Without coverage, which slows them by about 60%.
   test-slow:

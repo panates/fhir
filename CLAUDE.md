@@ -7,6 +7,8 @@ on FHIR. The packages are published under the `@fhirjs` scope (not yet published
 The design and every measured result are in
 [`docs/design/decorator-model.md`](docs/design/decorator-model.md) (sections 11–13). The state of
 the work and what is open are in [`docs/HANDOVER.md`](docs/HANDOVER.md).
+A handoff note between sessions goes to `.claude/local/handoff.md` (git-ignored); a new session
+reads it first.
 
 ## Layout
 

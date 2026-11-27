@@ -3,6 +3,11 @@
 A FHIR store over an existing SQL database, described table by table: reads, searches and
 writes of [`@fhirjs/server`](../server) translated to SQL with [sqb](https://github.com/panates/sqb).
 
+[![NPM Version][npm-image]][npm-url]
+[![NPM Downloads][downloads-image]][downloads-url]
+[![CI Tests][ci-test-image]][ci-test-url]
+[![Test Coverage][coveralls-image]][coveralls-url]
+
 The database keeps its own tables. Each resource type names its table, a function that maps a
 row to a resource, and its search parameters by the kind of column behind them. The store
 answers `read` and `search`, with chains, `_has`, composites, `_sort` and paging; the server
@@ -125,3 +130,12 @@ rows can have children of their own (an address's lines: `child('addresses.lines
 
 [`examples/facade`](../../examples/facade) describes an EMR's tables this way, and the design is
 in [`docs/decisions/sql-facade.md`](../../docs/decisions/sql-facade.md).
+
+[npm-image]: https://img.shields.io/npm/v/@fhirjs/sql
+[npm-url]: https://npmjs.org/package/@fhirjs/sql
+[downloads-image]: https://img.shields.io/npm/dm/@fhirjs/sql.svg
+[downloads-url]: https://npmjs.org/package/@fhirjs/sql
+[ci-test-image]: https://github.com/panates/fhirjs/actions/workflows/test.yml/badge.svg?branch=dev
+[ci-test-url]: https://github.com/panates/fhirjs/actions/workflows/test.yml
+[coveralls-image]: https://img.shields.io/coveralls/panates/fhirjs/main.svg
+[coveralls-url]: https://coveralls.io/r/panates/fhirjs

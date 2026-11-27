@@ -2,6 +2,11 @@
 
 SMART on FHIR building blocks: JWT verification with JWK Sets, and SMART scopes.
 
+[![NPM Version][npm-image]][npm-url]
+[![NPM Downloads][downloads-image]][downloads-url]
+[![CI Tests][ci-test-image]][ci-test-url]
+[![Test Coverage][coveralls-image]][coveralls-url]
+
 It has no dependency and uses Web Crypto. [`@fhirjs/client`](https://www.npmjs.com/package/@fhirjs/client)
 verifies id_tokens with it, and [`@fhirjs/server`](https://www.npmjs.com/package/@fhirjs/server)
 access tokens.
@@ -58,3 +63,12 @@ grantingScopes(scopes, 'c', 'Observation')[0].query; // 'category=laboratory'
 ## License
 
 BSD-3-Clause
+
+[npm-image]: https://img.shields.io/npm/v/@fhirjs/smart
+[npm-url]: https://npmjs.org/package/@fhirjs/smart
+[downloads-image]: https://img.shields.io/npm/dm/@fhirjs/smart.svg
+[downloads-url]: https://npmjs.org/package/@fhirjs/smart
+[ci-test-image]: https://github.com/panates/fhirjs/actions/workflows/test.yml/badge.svg?branch=dev
+[ci-test-url]: https://github.com/panates/fhirjs/actions/workflows/test.yml
+[coveralls-image]: https://img.shields.io/coveralls/panates/fhirjs/main.svg
+[coveralls-url]: https://coveralls.io/r/panates/fhirjs
